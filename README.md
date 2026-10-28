@@ -70,6 +70,8 @@ The host protects trusted policy, authority and ledger directories. Reviewed con
 
 Stored merge/delivery plans and receipts are checked for exact intent and object/state consistency before execution or recovery. Unsafe legacy records require explicit replanning or migration; see [integrity and recovery compatibility](interfaces/lifecycle/README.md#计划完整性与恢复兼容性). These checks do not protect against a malicious writer controlling the trusted policy and approval store.
 
+Check results retain optional failures separately from blocking decisions. N_A requires a current, scoped host applicability record; a legacy reason alone becomes UNKNOWN. CLI budget reports separate existing ledger capacity, observed work in this invocation and unknown external costs. Capacity is not authorization, and safe receipt queries remain available after exhaustion. See the [record and accounting contract](interfaces/lifecycle/README.md).
+
 ## Verification and project layout
 
 Validation uses the maintained local/CI entry, including ordinary and optimized Python, isolated Git demos, file safety and distribution checks. Results bind to the tested revision; see [verification scope](docs/acceptance.md) and the actual Actions run. Independent AI reviews are development activities, **not an installed automatic AI-review service**. Simulated approvals/delivery do not prove live platform acceptance.

@@ -56,7 +56,8 @@ def effective(s,e,check,identity):
     if e['subject']!=identity or e['config']!=check['config']:return 'UNKNOWN'
     if not e['complete'] or not set(check['scope'])<=set(e['scope']):return 'UNKNOWN'
     if not timestamp(e['observed_at'])<=now()<=timestamp(e['expires_at']):return 'UNKNOWN'
-    if e['status']=='N_A':return 'N_A' if check['na_reason'] else 'UNKNOWN'
+    # A tool observation cannot attest host-controlled applicability.
+    if e['status']=='N_A':return 'UNKNOWN'
     return e['status']
 
 
@@ -88,21 +89,59 @@ def latest_evidence(s,check,identity):
     return result
 
 
-def checks(s,stage,identity):
+def applicability(s,check,identity,source_identity=None):
+    """Return a current host attestation, or a fail-closed diagnostic.
+
+    Keep legacy/malformed attestations loadable: exact attempted-action recovery
+    validates historical intent and receipts without advancing current gates.
+    """
+    if check['na_reason']!='':
+        return None,'legacy na_reason requires explicit host reattestation'
+    if 'applicability' not in check:return None,None
+    record=check['applicability']
+    try:
+        keys(record,['schema','reason','basis','decider','source_subject_digest','scope'])
+        require(record['schema']=='check-applicability/v1','applicability schema')
+        for field in ['reason','basis','decider','source_subject_digest']:text(record[field])
+        scope=record['scope']
+        require(isinstance(scope,list) and scope,'applicability scope')
+        for value in scope:text(value)
+        require(len(scope)==len(set(scope)) and len(check['scope'])==len(set(check['scope'])) and
+                set(scope)==set(check['scope']),'applicability scope mismatch')
+        source=s.state['subject']
+        if check['stage']=='merge':
+            require(source_identity is not None and source_identity==source,
+                    'explicit current merge source required for applicability')
+            source=source_identity
+        else:require(identity==source,'applicability subject mismatch')
+        require(record['source_subject_digest']==digest(source),'applicability subject mismatch')
+    except (ValueError,TypeError,KeyError) as exc:
+        return None,'invalid applicability: '+str(exc)
+    return copy.deepcopy(record),None
+
+
+def checks(s,stage,identity,source_identity=None):
     result=[]
     for c in s.policy['checks']:
-        if c['stage']!=stage or not c['required']:continue
-        if c['na_reason']:
-            result.append({'id':c['id'],'status':'N_A','reason':c['na_reason']});continue
+        if c['stage']!=stage:continue
+        record,reason=applicability(s,c,identity,source_identity)
+        common={'id':c['id'],'required':c['required']}
+        if reason:
+            result.append(dict(common,status='UNKNOWN',blocking=c['required'],reason=reason));continue
+        if record:
+            result.append(dict(common,status='N_A',blocking=False,reason=record['reason'],
+                               applicability=record,policy_sha=s.pin,scope=copy.deepcopy(c['scope']),
+                               config=c['config']));continue
         latest=latest_evidence(s,c,identity)
         statuses=[group['status'] for group in latest]
         status=next((x for x in ['FAIL','BLOCKED','UNKNOWN','NOT_RUN'] if x in statuses), 'PASS' if statuses else 'NOT_RUN')
-        result.append({'id':c['id'],'status':status,'evidence':[e['id'] for group in latest for e in group['records']]})
+        result.append(dict(common,status=status,blocking=c['required'] and status not in {'PASS','N_A'},
+                           evidence=[e['id'] for group in latest for e in group['records']]))
     return result
 
 
-def evaluate(s,stage='pr',identity=None):
-    identity=identity or s.state['subject'];results=checks(s,stage,identity);reasons=[]
+def evaluate(s,stage='pr',identity=None,source_identity=None):
+    identity=identity or s.state['subject'];results=checks(s,stage,identity,source_identity);reasons=[]
     if stage=='pr' and s.state['round_subject']!=digest(s.state['subject']):reasons.append('current subject review round not registered')
     for f in s.state['findings'].values():
         if f['blocking'] and not f['alias']:reasons.append('unresolved finding '+f['id'])

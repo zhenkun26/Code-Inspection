@@ -7,6 +7,7 @@ import subprocess
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 from interfaces.lifecycle.core import Session,load,digest,require
 from interfaces.lifecycle import review,merge,delivery
+from interfaces.lifecycle.accounting import InvocationMetrics,budget_report
 
 
 def main():
@@ -20,8 +21,9 @@ def main():
         'merge-prepare','merge-preflight','merge-execute','merge-query','delivery-plan','delivery-execute',
         'delivery-query','observe','delivery-status'])
     args=p.parse_args()
+    metrics=InvocationMetrics();s=None
     try:
-        s=Session(args.host_root,args.policy_sha)
+        s=Session(args.host_root,args.policy_sha,metrics=metrics)
         with s.locked():
             if args.command=='init':
                 require(args.record,'host handoff record required');out=s.initialize(load(s.root,args.record))
@@ -45,9 +47,11 @@ def main():
                 elif c=='delivery-query':require(args.operation,'operation required');out=delivery.LocalSimulation(s).query(args.operation)
                 elif c=='delivery-status':out=delivery.evaluate(s)
                 elif c=='export':out={'schema':'lifecycle-handoff/v1','state':s.state,'pr_decision':review.evaluate(s),'publication':'NOT_RUN'}
+        out['budget_report']=budget_report(s,metrics);out['authorizes_action']=False
         print(json.dumps(out,ensure_ascii=False,indent=2,allow_nan=False));return 0
     except (ValueError,OSError,UnicodeError,TypeError,OverflowError,RecursionError,KeyError,subprocess.TimeoutExpired) as exc:
         print(json.dumps({'status':'UNKNOWN','recommendation':'REPLAN' if str(exc).startswith('REPLAN:') else 'HOLD',
-                          'reason':str(exc),'authorizes_action':False},ensure_ascii=False));return 2
+                          'reason':str(exc),'authorizes_action':False,
+                          'budget_report':budget_report(s,metrics)},ensure_ascii=False,allow_nan=False));return 2
 
 if __name__=='__main__':sys.exit(main())
