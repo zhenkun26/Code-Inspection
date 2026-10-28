@@ -8,7 +8,7 @@
 - `--input-root` 仅承载不受信工具结果与原始证据。ingest/observe/import-security 从这里读；init/adjudicate/advance/merge-prepare/delivery-plan 从 host-root 读指定记录。工具导入不含人类审批字段，不能写 host authority。宿主先筛选数据和秘密，日志内指令不执行。
 - authority.json 是有权人员决定的**宿主侧转录**：只承认政策列出的真人、精确 action/binding/policy、未过期且未撤销的记录。导入文件不能证明真人存在；接入真实平台必须由可信宿主核验身份/资格后记录，不能让 Agent 自签。按同一 decision id 写入后续 revoke，最新同 ID 记录生效。宿主须串行管理权限更新；这里不提供远端即时撤权或密码学签名服务。
 - session 文件锁只协调遵守此接口的本地进程，不能阻止有文件权限的人改账本。受控目录不应让目标项目或并行 reviewer 写入。若缺这种隔离，不能把程序当强制门禁。ledger 有 1 MiB 限额，达到时停止，不能删账本清零；迁移/归档需保留历史并由宿主明确处理。
-- 命令退出 0 只表示得到结果。读取 recommendation/checks/reasons 或真实 receipt；READY_FOR_NEXT 始终不授予动作权限。错误退出 2 且 UNKNOWN/HOLD，明确预算错误为 REPLAN。操作异常不等于产品缺陷。只读 status/export/query 不启动新轮；begin-review 计一轮，其他执行/导入命令计操作，内部 Git 命令另在方法中披露，不宣称覆盖外部模型的硬预算。
+- 命令退出 0 只表示得到结果。读取 recommendation/checks/reasons 或真实 receipt；READY_FOR_NEXT 始终不授予动作权限。错误退出 2 且 UNKNOWN/HOLD，明确预算错误为 REPLAN。操作异常不等于产品缺陷。轮次、操作账本和本次调用观察值的精确范围见下文，不宣称覆盖外部模型的硬预算。
 
 ## 模块与宿主接口
 
@@ -30,17 +30,55 @@
 
 交付输入仍为 `delivery-plan/v1`；存储计划升级为 `delivery-proposal/v2`。`provider_snapshot` 保存非递归 provider 状态及 operations 的摘要，`expected_provider` 是该快照的规范摘要。动作、参数、来源、目标及前置状态都进入计划 ID。新请求/回执分别使用 `delivery-request/v2`、`delivery-receipt/v2`，关联精确计划和结果状态；执行重查当前能力与回滚数据兼容性。回执确认的是该次本地模拟动作，不能据历史回执宣称当前产物、目标或群体仍未变化。
 
-缺少上述绑定的旧回执、旧交付计划及不一致记录明确拒绝；不会自动补字段、重算 ID 沿用旧批准或删除账本。保留旧记录，由宿主核对真实状态后在明确授权下重新规划/迁移。需要新动作的计划须重新取得精确批准；已有合法 v2 尝试的恢复查询与幂等性保留。预算计量、N_A 和产物标识的来源证明没有在本次完整性修复中改制。
+缺少上述绑定的旧回执、旧交付计划及不一致记录明确拒绝；不会自动补字段、重算 ID 沿用旧批准或删除账本。保留旧记录，由宿主核对真实状态后在明确授权下重新规划/迁移。需要新动作的计划须重新取得精确批准；已有合法 v2 尝试的恢复查询与幂等性保留。检查适用性与预算报告见下文；产物标识的内容依据仍由可信宿主核验。
 
 ## 最小配置与记录
 
+### 预算账本与调用观察
+
+CLI 成功结果和运行错误结果附加 `budget_report`（`lifecycle-budget-report/v1`），原有 budget、状态和建议不变。参数解析错误/帮助不创建报告；直接 Python 函数调用不自动生成 CLI 报告。`budget_report` 和顶层 `authorizes_action` 属于响应说明，不属于规范计划；不要将完整 CLI 响应回写为账本计划。报告有三个不同范围：
+
+- `ledger.scope=host_lifecycle_ledger` 保留跨阶段继承的 operations/rounds，不改收费点或重置。`operation_attempts` 的单位为 started_lifecycle_operation；begin-review 同时计一次操作和一轮，ingest/import-security、adjudicate、advance、merge-prepare、首次 merge-execute、delivery-plan、首次 delivery-execute、observe 在各自既有记账点计操作。开始记账后的失败也保留消耗；前置拒绝可能尚未到记账点。init 仅继承，状态/导出/查询、独立 preflight 和已有合法操作恢复不新增操作。
+- `observed_work.scope=current_cli_invocation` 观察本次单调时钟墙钟秒数、Git 子进程尝试、仓库扫描尝试及实际遍历条目、merge-tree 写树尝试。尝试在执行前记录，错误/超时和部分扫描也保留；执行内嵌预检共用同一观察器，不再额外收费。预检可能写 Git 对象，因此“账本未增加”不等于无工作或文件系统完全只读。零是本次确实未观察到该项，不代表历史或外部工作为零。
+- `external.cost` 与 `external.runtime_seconds` 均为 `{status: "unknown", value: null}`，不推算模型费用或宿主外部总耗时。观察值不写账本、不形成新硬限制，也不声称限制整个文件系统扫描的资源消耗。
+
+每种账本单位给出 used/limit/remaining/exhausted；`capacity.next_operation` 与 `next_review_round` 只说明现有计数是否容纳下一个相应记账，不能代替某条命令的政策、证据、批准或状态前提。轮次恰达上限仍可处理同轮的其他已允许操作，但不能新开一轮；超过任一适用上限不得开展对应新工作。有效最后一轮的全绿结果可以仍是 READY_FOR_NEXT，不能据此绕过后续执行预算。所有报告 `authorizes_action=false`。
+
+只有政策 pin、任务和已读账本绑定成立且计数有效才报告 known；缺失/非法历史计数不补零，显示 unknown/null。每次新记账前，operations 与 rounds 都必须是精确的非负整数；布尔值、负数、非整数或缺字段时拒绝并保留原账本，不通过算术把坏数据转换成正常计数。超过限额的合法整数保留实际 used，remaining 截为零。保存失败后，内存值仅标为 session_snapshot、durability=unknown，不宣称已经持久化；须先核查实际存储与回执，不凭容量重试。既有合法已尝试操作仍能在预算耗尽或计数未知时查询/幂等恢复，恢复不授予新动作。没有自动账本迁移或历史观察数据回填。
+
 完整可运行配置由自有 [fixture.py](../../validation/lifecycle/fixture.py) 在全新目录生成；里面的用户、预算、指标与时间都是**合成例子，不是已批准项目默认值**。真实使用需用户/宿主按需求填完整 policy；没有空配置自动放行。
 
-policy.json (`lifecycle-policy/v1`)：task_id、risk、checks、budget、humans、reviewers、high_expert_count、low_auto、allowed_actions、merge、delivery。checks 每项 id/stage(pr 或 merge)/gate(ci、semantic、security、integration)/scope/config/required/na_reason；三个 PR 门禁与集成必需要求必须明确，有依据不适用由受信 policy 的 na_reason 声明。budget 是 max_rounds/max_operations；handoff 带已消耗值。风险来自用户确认的影响，禁止由工具自行降级；样例数字不覆盖已定试点上限或宿主更严限制。
+policy.json (`lifecycle-policy/v1`)：task_id、risk、checks、budget、humans、reviewers、high_expert_count、low_auto、allowed_actions、merge、delivery。checks 每项 id/stage(pr 或 merge)/gate(ci、semantic、security、integration)/scope/config/required/na_reason，可附加下述有版本的 applicability；三个 PR 门禁与集成必需要求必须明确。budget 是 max_rounds/max_operations；handoff 带已消耗值。风险来自用户确认的影响，禁止由工具自行降级；样例数字不覆盖已定试点上限或宿主更严限制。
+
+### 检查适用性与可选结果
+
+普通适用检查继续使用 `na_reason: ""` 且不附 applicability。不适用必须由可信宿主在被固定摘要的 policy 中提供如下记录；示例中的占位摘要不能直接用于运行：
+
+```json
+{
+  "na_reason": "",
+  "applicability": {
+    "schema": "check-applicability/v1",
+    "reason": "本检查为何不适用",
+    "basis": "宿主已核查的规则或材料引用及适用范围依据",
+    "decider": "宿主核验并转录的判定者",
+    "source_subject_digest": "由 core.digest 对当前源 subject 计算的摘要",
+    "scope": ["与该 check.scope 精确一致的范围"]
+  }
+}
+```
+
+理由、依据和判定者不能留空或仅空白；scope 不能重复且必须与检查范围一致。check 的 ID、stage、config、task 和 policy pin 由其所属政策绑定。输出保留完整适用性记录及政策关联。decider 字符串不认证真人，basis 文本不自动证明事实；宿主必须先核查实际依据，不能从工具日志接纳自授豁免。工具返回 N_A 本身不能产生豁免，也不能代替高风险专家的有效 PASS、必要人工决定或阻断发现的处置。
+
+适用性绑定源 subject，advance 后旧声明失效。合并预检仅在候选与来源关系已验证后传入明确的源身份；声明覆盖的是该来源在指定检查范围内派生的组合，不声称另行证明候选特有的适用性，也不把尚未生成的候选 SHA 写进政策造成循环绑定。
+
+旧 `na_reason` 非空（包括纯空白）仍可加载，但不能继续豁免：相应检查记 UNKNOWN，要求宿主明确重核。缺字段、格式错误、范围/来源不符以及旧理由与新记录冲突也不产生 N_A。不会替旧数据编造依据、改 pin、清零预算或沿用旧批准；合法历史回执的只读查询与幂等恢复仍可用。重核后改变政策必须保留旧账本与连续用量，并按既有 pin/批准规则显式处理迁移；本接口不提供自动迁移器。交付能力的显式 opt-out 仍按交付政策处理。
+
+PR/集成结果展示所有已配置检查，逐项给出 required 和 blocking。可选检查的 FAIL/UNKNOWN 仍可见，但不自动阻断；必需失败仍阻断。由任何检查发现的未解决正式阻断问题独立生效，不能靠可选标签关闭。阶段建议和执行授权继续分开。
 
 初始 `pre-pr-handoff/v1`：task_id、五字段 subject（base/head/worktree_digest/ci_config_digest/artifact_digest）、budget(rounds/operations)、requirements_ref、history_ref、findings。宿主核对 PR 前原始证据后转录，不能只导入一个 PASS；历史 findings 按候选继续核验，不默认为已经解决。state 初始化只允许一次，不会在阶段切换时重置预算。
 
-`review-batch/v1` 包含 evidence 和 findings。证据字段见 [生成器 evidence 函数](../../validation/lifecycle/fixture.py)：精确 subject/config/scope/status/complete、observed_at/expires_at、provider/run/job/attempt/tool_version/context_id/reviewer、raw.path/sha256。原始文件受 1 MiB/no-follow 限制，摘要在导入时核验并保存；该接口不持续监控外部原始文件，也不提供不可变存储，宿主须归档对应字节供后续审计；partial、过期、错对象或覆盖不足不转 PASS。同 check 按 provider/job/reviewer/context 分组，按受信宿主核验的 observed_at 选择最新观察，不按导入顺序。run/attempt 为不透明标识，不用于排序；同一时刻的实质观察冲突记 UNKNOWN，需后续观察解除；任一当前失败/未知仍阻断，不能用另一视角 PASS 覆盖。所有旧失败留存，高风险人数也按最新有效尝试核对。增量依赖实际身份与范围，不按评论时间；跨身份复用需要宿主核查关系后导入新的证明记录，保留原出处，不直接改旧 PASS 的 subject。
+`review-batch/v1` 包含 evidence 和 findings。证据字段见 [生成器 evidence 函数](../../validation/lifecycle/fixture.py)：精确 subject/config/scope/status/complete、observed_at/expires_at、provider/run/job/attempt/tool_version/context_id/reviewer、raw.path/sha256。原始文件受 1 MiB/no-follow 限制，摘要在导入时核验并保存；该接口不持续监控外部原始文件，也不提供不可变存储，宿主须归档对应字节供后续审计；partial、过期、错对象或覆盖不足不转 PASS。同 check 按 provider/job/reviewer/context 分组，按受信宿主核验的 observed_at 选择最新观察，不按导入顺序。run/attempt 为不透明标识，不用于排序；同一时刻的实质观察冲突记 UNKNOWN，需后续观察解除；任一必需检查的当前失败/未知仍阻断，不能用另一视角 PASS 覆盖；可选检查的结果保持可见。所有旧失败留存，高风险人数也按最新有效尝试核对。增量依赖实际身份与范围，不按评论时间；跨身份复用需要宿主核查关系后导入新的证明记录，保留原出处，不直接改旧 PASS 的 subject。
 
 候选字段：id/subject/location/trigger/impact/severity/confidence_basis/attribution/attribution_basis/source/evidence_refs。无位置用明确“无法定位”并解释来源，不静默丢掉 off-diff 发现。候选默认阻断直至宿主核验；`finding-decision/v1` 由受信 reviewer 在 host-root 提供 actor/subject/finding/fact/disposition/blocking/reason/evidence_refs/duplicate_of。关闭需当前完整核验证据；只说暂缓/有意/接受风险不能关闭，本参考实现尚不提供豁免控制。去重保留两份观察/决策及关联，不按票数；新观察可重开，缺席不自动解决。程序检查核验记录关联，不证明其语义真实。
 

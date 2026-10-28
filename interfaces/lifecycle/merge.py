@@ -12,7 +12,8 @@ from support.git_runtime import git_environment
 from interfaces.lifecycle.review import evaluate
 
 class LocalGit:
-    def __init__(self, config):
+    def __init__(self, config, metrics=None):
+        self.metrics=metrics
         keys(config,['repository','target_ref','method'])
         require(config['method']=='merge_commit','BLOCKED: only merge_commit supported')
         self.root=Path(config['repository']).absolute();self.ref=config['target_ref']
@@ -30,14 +31,19 @@ class LocalGit:
         require('symlinks' not in cp['core'] or cp['core']['symlinks']=='false','only disabled Git symlinks supported')
         require(cp['core'].get('bare')=='true' and cp['core'].get('repositoryformatversion')=='0','bare SHA-1 repository required')
         require(not (self.root/'objects/info/alternates').exists(),'object alternates unsupported')
-        for path in self.root.rglob('*'):require(not is_link(path),'repository symlinks unsupported')
+        if self.metrics is not None:self.metrics.repository_scan()
+        for path in self.root.rglob('*'):
+            if self.metrics is not None:self.metrics.repository_entry()
+            require(not is_link(path),'repository symlinks unsupported')
         self.git=shutil.which('git');require(self.git is not None,'Git unavailable')
         self.env=git_environment()
         self.env['GIT_NO_REPLACE_OBJECTS']='1'
     def run(self,*args,input=None):
+        payload=input.encode('utf-8') if isinstance(input,str) else input
+        if self.metrics is not None:self.metrics.git_attempt(merge_tree_write=args[:2]==('merge-tree','--write-tree'))
         result = subprocess.run([self.git,'--git-dir',str(self.root),'-c','core.hooksPath='+os.devnull,
                                '-c','core.attributesFile='+os.devnull,
-                               '-c','protocol.allow=never',*args],input=input.encode('utf-8') if isinstance(input,str) else input,
+                               '-c','protocol.allow=never',*args],input=payload,
                                capture_output=True,env=self.env,timeout=10)
         # Git stdin is a byte protocol: text mode changes LF to CRLF on Windows.
         for stream in ('stdout','stderr'):
@@ -58,7 +64,7 @@ def prepare(s,request):
     keys(request,['schema','base','head','integration_artifact'])
     require(request['schema']=='merge-plan/v1','merge plan schema');text(request['integration_artifact'])
     require(evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: PR gate incomplete')
-    g=LocalGit(s.policy['merge']);base=g.oid(request['base']);head=g.oid(request['head'])
+    g=LocalGit(s.policy['merge'],metrics=getattr(s,'metrics',None));base=g.oid(request['base']);head=g.oid(request['head'])
     require(base==s.state['subject']['base'] and head==s.state['subject']['head'],'PR/combination identity mismatch')
     require(g.target()==base,'HOLD: target drift before preparation')
     binding=digest({'repository':str(g.root),'base':base,'head':head,'policy_sha':s.pin})
@@ -87,7 +93,7 @@ def validate_plan(s,plan=None):
     for name in ['repository','target_ref','method','base','head','candidate','tree','policy_sha','id']:text(plan[name])
     subject(plan['subject']);subject(plan['source_subject'])
     require(plan['id']==digest({k:v for k,v in plan.items() if k!='id'}),'merge plan digest mismatch')
-    g=LocalGit(s.policy['merge'])
+    g=LocalGit(s.policy['merge'],metrics=getattr(s,'metrics',None))
     require(plan['repository']==str(g.root) and plan['target_ref']==g.ref and
             plan['method']==s.policy['merge']['method'] and plan['policy_sha']==s.pin,'merge plan policy binding mismatch')
     for name in ['base','head','candidate']:g.oid(plan[name])
@@ -139,7 +145,7 @@ def validate_receipt(s,plan):
 
 
 def _preflight(s,plan,g):
-    result=evaluate(s,'merge',plan['subject'])
+    result=evaluate(s,'merge',plan['subject'],source_identity=plan['source_subject'])
     # Revalidate prior PR decisions and findings immediately before execution.
     prior=evaluate(s)
     if prior['recommendation']!='READY_FOR_NEXT':result['reasons'].append('PR gate no longer satisfied')

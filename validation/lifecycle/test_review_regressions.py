@@ -104,7 +104,7 @@ class ReviewRegressions(unittest.TestCase):
                 if reverse:
                     records.reverse()
                 result = self.ingest(session, records)
-                self.assertEqual(self.check(result), dict(id='semantic', status='FAIL', evidence=['new-fail']))
+                self.assertEqual(self.check(result), dict(id='semantic', status='FAIL', evidence=['new-fail'], required=True, blocking=True))
                 self.assertEqual(result['recommendation'], 'HOLD')
                 self.assertEqual(len(session.state['evidence']), 5)
 
@@ -112,7 +112,7 @@ class ReviewRegressions(unittest.TestCase):
         session = self.create_session()
         self.ingest(session, [self.evidence(session, 'semantic', 'new-pass', -1)])
         result = self.ingest(session, [self.evidence(session, 'semantic', 'late-old-fail', -2, 'FAIL')])
-        self.assertEqual(self.check(result), dict(id='semantic', status='PASS', evidence=['new-pass']))
+        self.assertEqual(self.check(result), dict(id='semantic', status='PASS', evidence=['new-pass'], required=True, blocking=False))
         self.assertEqual(result['recommendation'], 'READY_FOR_NEXT')
 
     def test_conflicting_same_instant_observations_are_unknown_in_either_order(self):
@@ -125,14 +125,14 @@ class ReviewRegressions(unittest.TestCase):
                     records.reverse()
                 result = self.ingest(session, records)
                 self.assertEqual(self.check(result), dict(id='semantic', status='UNKNOWN',
-                                                         evidence=['same-fail', 'same-pass']))
+                                                         evidence=['same-fail', 'same-pass'], required=True, blocking=True))
                 self.assertEqual(result['recommendation'], 'HOLD')
 
     def test_equivalent_same_instant_observations_preserve_pass(self):
         session = self.create_session()
         records = [self.evidence(session, 'semantic', name, -1) for name in ('same-a', 'same-b')]
         result = self.ingest(session, records)
-        self.assertEqual(self.check(result), dict(id='semantic', status='PASS', evidence=['same-a', 'same-b']))
+        self.assertEqual(self.check(result), dict(id='semantic', status='PASS', evidence=['same-a', 'same-b'], required=True, blocking=False))
         self.assertEqual(result['recommendation'], 'READY_FOR_NEXT')
 
     def test_another_provider_pass_does_not_replace_failure(self):

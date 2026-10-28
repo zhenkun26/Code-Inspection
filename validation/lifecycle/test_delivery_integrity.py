@@ -78,7 +78,14 @@ class DeliveryIntegrity(unittest.TestCase):
             parameters = {'artifact': 'old-artifact'}
         write(self.host, 'action.json', dict(schema='delivery-plan/v1',
               action=action, parameters=parameters))
-        return self.cli('delivery-plan', record='action.json')
+        out = self.cli('delivery-plan', record='action.json')
+        stored = self.read('state.json')['delivery']['plans'][out['id']]
+        # CLI observations are not canonical plan fields. Check the projection
+        # before corrupting the actual stored intent, or extra-field rejection
+        # could hide a missing integrity guard.
+        self.assertEqual({k: v for k, v in out.items()
+                          if k not in {'budget_report', 'authorizes_action'}}, stored)
+        return stored
 
     def approve(self, proposal):
         grant(self.host, self.pin, 'delivery-' + proposal['action'], proposal['id'])
@@ -145,6 +152,9 @@ class DeliveryIntegrity(unittest.TestCase):
             'action': lambda p: p.update(action='pause'),
             'policy': lambda p: p.update(policy_sha='unrelated-policy'),
             'subject': lambda p: p['subject'].update(head='unreviewed-head'),
+            # A well-shaped identity change isolates digest binding from the
+            # independent type/shape guards exercised by the invalid head.
+            'subject_worktree': lambda p: p['subject'].update(worktree_digest='different-snapshot'),
             'source': lambda p: p.update(source={'merge_plan': 'unrelated'}),
             'simulation': lambda p: p.update(simulation=False),
             'provider': lambda p: p.update(expected_provider='0' * 64),

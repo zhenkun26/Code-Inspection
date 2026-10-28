@@ -57,7 +57,10 @@ def save(root, name, value):
             raise
 
 class Session:
-    def __init__(self, host_root, policy_sha):
+    def __init__(self, host_root, policy_sha, metrics=None):
+        self.metrics = metrics
+        self.accounting_trusted = False
+        self.accounting_durability = 'unknown'
         self.root = checked_root(host_root)
         raw = read_bytes(self.root, 'policy.json')
         require(hashlib.sha256(raw).hexdigest() == policy_sha, 'host policy pin mismatch')
@@ -78,7 +81,7 @@ class Session:
         require(isinstance(p['checks'],list) and p['checks'], 'nonempty checks')
         ids=set()
         for c in p['checks']:
-            keys(c,['id','stage','gate','scope','config','required','na_reason'])
+            keys(c,['id','stage','gate','scope','config','required','na_reason'],['applicability'])
             require(c['id'] not in ids,'duplicate check');ids.add(c['id']);text(c['id'])
             require(c['stage'] in {'pr','merge'},'check stage')
             require(c['gate'] in {'ci','semantic','security','integration'},'gate')
@@ -86,13 +89,15 @@ class Session:
             require(isinstance(c['scope'],list) and c['scope'],'scope')
             for x in c['scope']:text(x)
             require(isinstance(c['na_reason'],str),'na reason')
-        require({'ci','semantic','security'} <= {c['gate'] for c in p['checks'] if c['stage']=='pr' and c['required']}, 'PR gates must be explicit (N_A needs policy reason)')
+        require({'ci','semantic','security'} <= {c['gate'] for c in p['checks'] if c['stage']=='pr' and c['required']}, 'PR gates must be explicit (N_A needs host applicability record)')
         require(any(c['stage']=='merge' and c['required'] for c in p['checks']), 'integration checks required')
         self.state = None
 
     @contextmanager
     def locked(self):
         original = self.root
+        self.accounting_trusted = False
+        self.accounting_durability = 'unknown'
         with root_lock(original) as selected:
             self.root = selected
             try:
@@ -102,16 +107,24 @@ class Session:
                 self.state=state
                 if state is not None:
                     require(state['policy_sha']==self.pin and state['task_id']==self.policy['task_id'],'state/policy mismatch; explicit migration required')
+                self.accounting_trusted = True
+                self.accounting_durability = 'persisted' if state is not None else 'unknown'
                 yield self
             finally:
                 self.root = original
 
     def event(self, action, detail):
         self.state['events'].append({'at':now().isoformat(),'action':action,'detail':detail})
-    def persist(self):save(self.root,'state.json',self.state)
+    def persist(self):
+        self.accounting_durability = 'unknown'
+        save(self.root,'state.json',self.state)
+        self.accounting_durability = 'persisted'
     def charge(self, rounds=0):
         require(self.state is not None,'initialize handoff first')
-        used=self.state['budget'];limit=self.policy['budget']
+        used=self.state.get('budget')
+        require(isinstance(used,dict) and all(type(used.get(name)) is int and used[name]>=0
+                for name in ['operations','rounds']),'REPLAN: invalid budget usage; explicit migration required')
+        limit=self.policy['budget']
         require(used['operations']+1<=limit['max_operations'] and used['rounds']+rounds<=limit['max_rounds'],'REPLAN: budget exhausted')
         used['operations']+=1;used['rounds']+=rounds
         self.persist() # started attempts count even if later processing fails
@@ -151,7 +164,7 @@ class Session:
                 and timestamp(d['expires_at'])>=now()): return True
         return False
     def output(self, stage, checks, reasons):
-        bad=any(x['status'] not in {'PASS','N_A'} for x in checks) or bool(reasons)
+        bad=any(x.get('required',True) and x['status'] not in {'PASS','N_A'} for x in checks) or bool(reasons)
         exhausted=(self.state['budget']['operations']>=self.policy['budget']['max_operations'] or
                    self.state['budget']['rounds']>=self.policy['budget']['max_rounds'])
         recommendation='REPLAN' if bad and exhausted else 'HOLD' if bad else 'READY_FOR_NEXT'
