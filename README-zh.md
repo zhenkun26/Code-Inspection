@@ -68,6 +68,8 @@ python3 -B validation/mutation_check.py
 
 宿主保护政策、权限和账本目录；被审内容及日志不能扩权。JSON人名及摘要不是认证或沙箱。必需证据缺失、过时或不完整时保留缺口；READY_FOR_NEXT不授予合并或发布权限。见 [共享核心契约](skills/pre-pr-review/references/contract.md)。
 
+存储的合并/交付计划与回执在执行或恢复前核对精确意图、实际对象和状态关系。不安全的旧记录需要明确重新规划或迁移，见 [完整性与恢复兼容性](interfaces/lifecycle/README.md#计划完整性与恢复兼容性)。这些检查不能防御同时控制受信政策和批准存储的恶意写入者。
+
 ## 验证与项目结构
 
 验证复用维护中的本地/CI入口，包括普通与优化Python、隔离Git示范、文件安全及分发检查。结果绑定实际受测版本，见 [验证范围](docs/acceptance.md) 和具体Actions运行。独立AI审阅属于开发过程，**不是已安装的自动AI审核服务**；模拟批准/交付不证明真实平台验收。

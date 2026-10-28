@@ -1,11 +1,12 @@
 """Controlled bare-Git reference adapter. No remote, checkout, hooks or target app."""
 import configparser
+import copy
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
-from interfaces.lifecycle.core import load, keys, text, digest, require, now
+from interfaces.lifecycle.core import load, keys, text, digest, require, now, subject, timestamp
 from support.local_files import is_link, read_bytes
 from support.git_runtime import git_environment
 from interfaces.lifecycle.review import evaluate
@@ -32,6 +33,7 @@ class LocalGit:
         for path in self.root.rglob('*'):require(not is_link(path),'repository symlinks unsupported')
         self.git=shutil.which('git');require(self.git is not None,'Git unavailable')
         self.env=git_environment()
+        self.env['GIT_NO_REPLACE_OBJECTS']='1'
     def run(self,*args,input=None):
         result = subprocess.run([self.git,'--git-dir',str(self.root),'-c','core.hooksPath='+os.devnull,
                                '-c','core.attributesFile='+os.devnull,
@@ -42,10 +44,11 @@ class LocalGit:
             value=getattr(result,stream)
             if isinstance(value,bytes):setattr(result,stream,value.decode('utf-8'))
         return result
-    def oid(self,value):
-        require(isinstance(value,str) and re.fullmatch('[0-9a-f]{40}',value),'full commit OID required')
-        x=self.run('cat-file','-t',value);require(x.returncode==0 and x.stdout.strip()=='commit','commit unavailable')
+    def object_oid(self,value,kind):
+        require(isinstance(value,str) and re.fullmatch('[0-9a-f]{40}',value) and value!='0'*40,'full nonzero '+kind+' OID required')
+        x=self.run('cat-file','-t',value);require(x.returncode==0 and x.stdout.strip()==kind,kind+' unavailable')
         return value
+    def oid(self,value):return self.object_oid(value,'commit')
     def target(self):
         symbolic=self.run('symbolic-ref','-q',self.ref);require(symbolic.returncode==1,'symbolic target unsupported')
         x=self.run('rev-parse','--verify',self.ref);require(x.returncode==0,'target unavailable');return self.oid(x.stdout.strip())
@@ -74,39 +77,118 @@ def prepare(s,request):
     return {'status':'NOT_RUN','recommendation':'HOLD','plan':plan,'reason':'integration evidence and independent execution authority required'}
 
 
-def preflight(s):
-    plan=s.state['merge'];require(plan,'merge plan required')
+def validate_plan(s,plan=None):
+    """Validate historical intent and physical Git facts without current PR gates."""
+    if plan is None:plan=s.state['merge']
+    require(plan,'merge plan required')
+    keys(plan,['repository','target_ref','method','base','head','candidate','tree',
+               'subject','source_subject','policy_sha','id'])
+    plan=copy.deepcopy(plan)
+    for name in ['repository','target_ref','method','base','head','candidate','tree','policy_sha','id']:text(plan[name])
+    subject(plan['subject']);subject(plan['source_subject'])
+    require(plan['id']==digest({k:v for k,v in plan.items() if k!='id'}),'merge plan digest mismatch')
+    g=LocalGit(s.policy['merge'])
+    require(plan['repository']==str(g.root) and plan['target_ref']==g.ref and
+            plan['method']==s.policy['merge']['method'] and plan['policy_sha']==s.pin,'merge plan policy binding mismatch')
+    for name in ['base','head','candidate']:g.oid(plan[name])
+    g.object_oid(plan['tree'],'tree')
+    source=plan['source_subject']
+    require(source['base']==plan['base'] and source['head']==plan['head'],'merge source identity mismatch')
+    expected=dict(source,head=plan['candidate'],worktree_digest='tree:'+plan['tree'],
+                  artifact_digest=plan['subject']['artifact_digest'])
+    require(plan['subject']==expected,'merge combination identity mismatch')
+    result=g.run('cat-file','commit',plan['candidate'])
+    require(result.returncode==0,'candidate commit unavailable')
+    headers=result.stdout.split('\n\n',1)[0].splitlines()
+    tree_headers=[line for line in headers if line.split(' ',1)[0]=='tree']
+    parent_headers=[line for line in headers if line.split(' ',1)[0]=='parent']
+    require(tree_headers==['tree '+plan['tree']] and headers[0]==tree_headers[0],
+            'candidate tree mismatch')
+    require(parent_headers==['parent '+plan['base'],'parent '+plan['head']],
+            'candidate ordered parents mismatch')
+    return plan,g
+
+
+def validate_receipt(s,plan):
+    require(isinstance(s.state['receipts'],dict),'merge receipts mapping required')
+    if plan['id'] not in s.state['receipts']:return None
+    receipt=s.state['receipts'][plan['id']]
+    require(isinstance(receipt,dict) and receipt.get('schema')=='merge-receipt/v2',
+            'legacy or invalid merge receipt requires explicit migration')
+    keys(receipt,['schema','operation','repository','target_ref','policy_sha','base','candidate','result','requested_at'],
+         ['exit_code','actual_target','observed_at','diagnostics'])
+    receipt=copy.deepcopy(receipt)
+    for name in ['operation','repository','target_ref','policy_sha','base','candidate','result']:text(receipt[name])
+    require(receipt['operation']==plan['id'] and all(receipt[name]==plan[name] for name in
+            ['repository','target_ref','policy_sha','base','candidate']),'merge receipt intent mismatch')
+    require(receipt['result'] in {'pending','unknown','confirmed','failed'},'merge receipt result invalid')
+    timestamp(receipt['requested_at'])
+    if 'exit_code' in receipt:
+        require(type(receipt['exit_code']) is int,'merge receipt exit code invalid')
+        require(receipt['exit_code']==0 or receipt['result']=='failed','known Git failure requires failed merge receipt')
+    if 'actual_target' in receipt:
+        require(isinstance(receipt['actual_target'],str) and re.fullmatch('[0-9a-f]{40}',receipt['actual_target']) and
+                receipt['actual_target']!='0'*40,'merge receipt actual target invalid')
+    if 'observed_at' in receipt:
+        require(timestamp(receipt['observed_at'])>=timestamp(receipt['requested_at']),'merge receipt observation precedes request')
+    if 'diagnostics' in receipt:text(receipt['diagnostics'])
+    if receipt['result']=='confirmed':
+        require(receipt.get('exit_code')==0 and receipt.get('actual_target')==plan['candidate'] and
+                'observed_at' in receipt,'contradictory confirmed merge receipt')
+    return receipt
+
+
+def _preflight(s,plan,g):
     result=evaluate(s,'merge',plan['subject'])
     # Revalidate prior PR decisions and findings immediately before execution.
     prior=evaluate(s)
     if prior['recommendation']!='READY_FOR_NEXT':result['reasons'].append('PR gate no longer satisfied')
-    g=LocalGit(s.policy['merge'])
     if g.target()!=plan['base']:result['reasons'].append('target drift')
     if plan['source_subject']!=s.state['subject']:result['reasons'].append('candidate stale')
+    combined=g.run('merge-tree','--write-tree',plan['base'],plan['head'])
+    require(combined.returncode==0 and combined.stdout.splitlines() and combined.stdout.splitlines()[0]==plan['tree'],
+            'merge combination tree mismatch or unavailable')
     if not s.authorized('merge-execute',plan['id']):result['reasons'].append('merge execution authority missing')
     if s.state['budget']['operations']>=s.policy['budget']['max_operations']:result['reasons'].append('operation budget exhausted')
     if result['reasons']:result=s.output('merge',result['checks'],result['reasons'])
     return result
 
 
-def query(s):
-    plan=s.state['merge'];require(plan,'merge plan required');g=LocalGit(s.policy['merge']);actual=g.target()
-    receipt=s.state['receipts'].get(plan['id'])
-    state='confirmed' if actual==plan['candidate'] and receipt else 'not_applied' if actual==plan['base'] else 'unknown'
+def preflight(s):
+    plan,g=validate_plan(s);validate_receipt(s,plan)
+    return _preflight(s,plan,g)
+
+
+def _query(plan,g,receipt):
+    actual=g.target()
+    state='confirmed' if actual==plan['candidate'] and receipt is not None and receipt['result'] in {'pending','unknown','confirmed'} else 'not_applied' if actual==plan['base'] else 'unknown'
     return {'operation':plan['id'],'result':state,'actual_target':actual,'receipt':receipt,'source':'local-git-ref-read','simulation':False,'isolated_reference':True}
 
 
+def query(s):
+    plan,g=validate_plan(s);receipt=validate_receipt(s,plan)
+    return _query(plan,g,receipt)
+
+
 def execute(s):
-    plan=s.state['merge'];require(plan,'merge plan required')
-    if plan['id'] in s.state['receipts']:return query(s)
-    require(preflight(s)['recommendation']=='READY_FOR_NEXT','HOLD: merge preflight not ready')
-    s.charge();g=LocalGit(s.policy['merge'])
+    plan,g=validate_plan(s);receipt=validate_receipt(s,plan)
+    if receipt is not None:return _query(plan,g,receipt)
+    require(_preflight(s,plan,g)['recommendation']=='READY_FOR_NEXT','HOLD: merge preflight not ready')
+    s.charge()
     # The expected-old OID is checked atomically by Git, unlike check-then-merge.
-    s.state['receipts'][plan['id']]={'result':'pending','requested_at':now().isoformat(),'base':plan['base'],'candidate':plan['candidate']};s.persist()
+    receipt={'schema':'merge-receipt/v2','operation':plan['id'],
+             **{name:plan[name] for name in ['repository','target_ref','policy_sha','base','candidate']},
+             'result':'pending','requested_at':now().isoformat()}
+    s.state['receipts'][plan['id']]=receipt;s.persist()
     try:x=g.run('update-ref','--no-deref',plan['target_ref'],plan['candidate'],plan['base'])
-    except subprocess.TimeoutExpired:
-        s.state['receipts'][plan['id']]['result']='unknown';s.persist();return query(s)
-    actual=g.target();receipt=s.state['receipts'][plan['id']]
-    receipt.update(result='confirmed' if x.returncode==0 and actual==plan['candidate'] else 'failed' if actual==plan['base'] else 'unknown',
+    except (subprocess.TimeoutExpired,OSError) as exc:
+        receipt.update(result='unknown',diagnostics=type(exc).__name__+': '+str(exc)[:2048]);s.persist()
+        return _query(plan,g,receipt)
+    try:actual=g.target()
+    except (ValueError,OSError,subprocess.TimeoutExpired) as exc:
+        receipt.update(result='failed' if x.returncode!=0 else 'unknown',exit_code=x.returncode,
+                       diagnostics=type(exc).__name__+': '+str(exc)[:2048]);s.persist()
+        raise
+    receipt.update(result='failed' if x.returncode!=0 or actual==plan['base'] else 'confirmed' if actual==plan['candidate'] else 'unknown',
                    exit_code=x.returncode,actual_target=actual,observed_at=now().isoformat())
-    s.event('merge-result',receipt);s.persist();return query(s)
+    s.event('merge-result',receipt);s.persist();return _query(plan,g,receipt)

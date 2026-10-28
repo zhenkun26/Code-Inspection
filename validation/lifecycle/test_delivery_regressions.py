@@ -27,7 +27,7 @@ class MemorySession:
                     'max_value':1,'max_age_seconds':600,'source':'synthetic','query':'errors'},
                 'rollback_compatibility':{'old-artifact':'v1'}}}
         self.state={'subject':identity,'round_subject':digest(identity),'evidence':[],
-            'findings':{},'delivery':{},'merge':{},'budget':{'operations':0,'rounds':1}}
+            'findings':{},'delivery':{},'merge':{},'events':[],'budget':{'operations':0,'rounds':1}}
         for c in checks:
             self.state['evidence'].append(dict(id=c['id'],check=c['id'],subject=identity,
                 config='cfg',scope=['all'],status='PASS',complete=True,
@@ -37,7 +37,7 @@ class MemorySession:
 
     def charge(self):self.state['budget']['operations']+=1
     def persist(self):pass
-    def event(self,*args):pass
+    def event(self,action,detail):self.state['events'].append({'action':action,'detail':copy.deepcopy(detail)})
     def authorized(self,action,binding):return (action,binding) in self.grants
 
 
@@ -56,6 +56,8 @@ class DeliveryRegressions(unittest.TestCase):
         for replacement in [patch.object(delivery,'load',side_effect=lambda root,name:copy.deepcopy(self.provider)),
                             patch.object(delivery,'save',side_effect=self.save),
                             patch.object(delivery,'now',side_effect=lambda:self.clock),
+                            patch.object(delivery,'merge_validate',side_effect=lambda s,plan:(copy.deepcopy(plan),None)),
+                            patch.object(delivery,'merge_receipt',side_effect=lambda s,plan:{'result':'confirmed'}),
                             patch.object(delivery,'merge_query',side_effect=lambda s:{'result':self.merge_result})]:
             replacement.start();self.addCleanup(replacement.stop)
 
@@ -65,6 +67,7 @@ class DeliveryRegressions(unittest.TestCase):
     def merged(self):
         self.s.state['merge']={'id':'synthetic-merge-plan','source_subject':copy.deepcopy(self.s.state['subject']),
             'subject':dict(self.s.state['subject'],artifact_digest='combined-artifact')}
+        self.s.event('merge-prepare',{'plan':self.s.state['merge']})
 
     def proposal(self,action,parameters):
         return delivery.plan(self.s,{'schema':'delivery-plan/v1','action':action,'parameters':parameters})
@@ -121,7 +124,7 @@ class DeliveryRegressions(unittest.TestCase):
         deployed=self.deploy();self.observe()
         proposal=self.proposal('promote',{'artifact':'combined-artifact','channel':'stable'})
         self.s.state['delivery']['plans'][deployed['operation']]['source']={'merge_plan':'unrelated-plan'}
-        with self.assertRaisesRegex(ValueError,'confirmed deployment'):self.execute(proposal)
+        with self.assertRaisesRegex(ValueError,'proposal digest mismatch'):self.execute(proposal)
         self.assertEqual(self.provider['channels'],{})
 
     def test_enable_rechecks_merge_confirmation_at_execution(self):
@@ -132,7 +135,7 @@ class DeliveryRegressions(unittest.TestCase):
 
     def test_current_merge_artifact_must_match_provider(self):
         self.deploy();self.s.state['merge']['subject']['artifact_digest']='replacement-artifact'
-        with self.assertRaisesRegex(ValueError,'artifact must match'):
+        with self.assertRaisesRegex(ValueError,'artifact must match|delivery merge source mismatch'):
             self.proposal('flag-set',{'enabled':True,'cohort':'internal'})
 
     def test_old_deploy_receipt_does_not_survive_subject_change(self):
@@ -140,7 +143,7 @@ class DeliveryRegressions(unittest.TestCase):
         self.s.state['round_subject']=digest(self.s.state['subject'])
         for record in self.s.state['evidence']:record['subject']=self.s.state['subject']
         self.s.state['merge']['source_subject']=copy.deepcopy(self.s.state['subject'])
-        with self.assertRaisesRegex(ValueError,'confirmed deployment'):
+        with self.assertRaisesRegex(ValueError,'confirmed deployment|delivery merge source mismatch'):
             self.proposal('flag-set',{'enabled':True,'cohort':'internal'})
 
     def test_recovery_stays_available_without_merge_and_with_blocker(self):
