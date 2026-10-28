@@ -15,6 +15,17 @@ sys.path.insert(0, str(ROOT))
 from validation.test_support import temporary_directory
 
 CASES = [
+    ('runner-load-tests-coverage', 'validation/run_checks.py',
+     "or (isinstance(node, ast.Name) and node.id == 'load_tests') for node in ast.walk(tree)):\n        raise ValueError(error)",
+     "or (isinstance(node, ast.Name) and node.id == 'load_tests') for node in ast.walk(tree)):\n        pass",
+     'validation/test_check_runner.py', 'CheckRunner.test_unsupported_discovery_shapes_fail_closed'),
+    ('runner-timeout-failure', 'validation/run_checks.py',
+     "record.update(status='TIMEOUT', exit_code=124, timeout_seconds=timeout,",
+     "record.update(status='PASS', exit_code=0, timeout_seconds=timeout,",
+     'validation/test_check_runner.py', 'CheckRunner.test_real_timeout_preserves_partial_log_and_marks_remaining_not_run'),
+    ('runner-shard-coverage', 'validation/run_checks.py',
+     'return [names[::2], names[1::2]]', 'return [names[::2], names[::2]]',
+     'validation/test_check_runner.py', 'CheckRunner.test_shards_cover_actual_loader_once_and_include_new_cases'),
     ('legacy-applicability', 'interfaces/lifecycle/review.py',
      "if check['na_reason']!='':", 'if False:',
      'validation/lifecycle/test_applicability.py', 'Applicability.test_legacy_reason_and_whitespace_are_unknown_even_with_pass'),
