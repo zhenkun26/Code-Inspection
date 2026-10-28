@@ -1,0 +1,38 @@
+{
+  "schema": "security-result/v1",
+  "request_id": "simulated-001",
+  "subject": {
+    "base": "base-fixture",
+    "head": "head-fixture",
+    "worktree_digest": "fixture-worktree",
+    "ci_config_digest": "fixture-ci",
+    "artifact_digest": "fixture-artifact"
+  },
+  "tool": {
+    "name": "self-owned-sample",
+    "version": "1"
+  },
+  "config_digest": "fixture-config",
+  "scope": [
+    "fixture.txt"
+  ],
+  "complete": true,
+  "execution": {
+    "outcome": "completed",
+    "exit_code": 0
+  },
+  "findings": [],
+  "raw_evidence": [
+    {
+      "path": "raw.txt",
+      "sha256": "0583861190af66497e155a2d7243cacf1a9d1b9e3cc78254166bd8ca7d06f411"
+    }
+  ],
+  "data_destination": "none",
+  "license": {
+    "identifier": "self-owned-test-data",
+    "source": "local fixture; no third-party material",
+    "review_state": "reviewed"
+  },
+  "observed_at_utc": "2026-10-27T00:00:00+00:00"
+}

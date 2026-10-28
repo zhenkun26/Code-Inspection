@@ -1,0 +1,24 @@
+{
+  "schema": "security-request/v1",
+  "request_id": "simulated-001",
+  "policy_binding": "user-designated-synthetic-policy",
+  "required": true,
+  "expected_subject": {
+    "base": "base-fixture",
+    "head": "head-fixture",
+    "worktree_digest": "fixture-worktree",
+    "ci_config_digest": "fixture-ci",
+    "artifact_digest": "fixture-artifact"
+  },
+  "expected_tool": {
+    "name": "self-owned-sample",
+    "version": "1"
+  },
+  "expected_config_digest": "fixture-config",
+  "required_scope": [
+    "fixture.txt"
+  ],
+  "accepted_data_destination": "none",
+  "valid_from_utc": "2026-10-27T00:00:00+00:00",
+  "valid_until_utc": "2030-01-01T00:00:00+00:00"
+}

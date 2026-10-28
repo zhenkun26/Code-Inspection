@@ -1,0 +1,1 @@
+SIMULATED tool record; no actual security scanner executed.

@@ -1,0 +1,81 @@
+# Private reference archives and original user-provided material.
+# Ignoring files does not redact them or grant redistribution rights.
+/reference/
+/inputs/
+/uploads/
+/private/
+
+# Review transcripts, historical snapshots, raw run evidence and outputs.
+/docs/reviews/
+/validation/**/results/
+/validation/**/history/
+*.log
+/runs/
+/artifacts/
+/test-results/
+/playwright-report/
+/tmp/
+/temp/
+
+# Local credentials: retain intentionally sanitized example templates only.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.credentials/
+credentials.json
+.netrc
+.aws/
+.ssh/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# System and interpreter/tool caches.
+.DS_Store
+._*
+__pycache__/
+*.py[cod]
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+
+# Local development/design history: excluded from the minimal distribution.
+# Tracked files remain tracked; this is not history removal.
+/docs/SHA256SUMS-evaluation-case-library-design-v0.1
+/docs/SHA256SUMS-lifecycle-implementation-v0.1
+/docs/SHA256SUMS-merge-time-v0.1
+/docs/SHA256SUMS-post-merge-v0.1
+/docs/SHA256SUMS-pr-in-adaptation-v0.1
+/docs/SHA256SUMS-pr-in-security-v0.1
+/docs/SHA256SUMS-pre-pr-implementation-v0.1
+/docs/SHA256SUMS-pre-pr-v0.1
+/docs/SHA256SUMS-readme-license-v0.1
+/docs/SHA256SUMS-scoring-alignment-v0.1
+/docs/SHA256SUMS-usability-v0.1
+/docs/SHA256SUMS-v0.1
+/docs/evaluation-case-library-design-v0.1.md
+/docs/evaluation-scoring-design-v0.1.md
+/docs/four-stage-project-assessment-v0.1.md
+/docs/licensing-review-v0.1.md
+/docs/lifecycle-implementation-validation-v0.1.md
+/docs/merge-time-design-v0.1.md
+/docs/post-merge-design-v0.1.md
+/docs/post-merge-source-adaptation-v0.1.md
+/docs/pr-in-design-v0.1.md
+/docs/pr-in-security-validation-v0.1.md
+/docs/pr-in-source-adaptation-v0.1.md
+/docs/pre-pr-implementation-validation-v0.1.md
+/docs/pre-pr-pr-in-alignment-review-v0.1.md
+/docs/pre-pr-skill-design-v0.1.md
+/docs/pre-pr-source-selection-v0.1.md
+/docs/skill-architecture-v0.1.md
+/docs/source-decisions-v0.1.md
+/docs/usability-validation-v0.1.md

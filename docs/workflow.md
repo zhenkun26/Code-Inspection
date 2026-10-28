@@ -1,0 +1,42 @@
+# Current workflow and capability boundaries
+
+This is the current compact distribution guide. State semantics, permissions, evidence and budgets are defined once in the [core contract](../skills/pre-pr-review/references/contract.md), [planning](../skills/pre-pr-review/references/planning.md), [runtime](../skills/pre-pr-review/references/runtime.md) and [recheck](../skills/pre-pr-review/references/recheck.md) protocols. Use the [record template](../skills/pre-pr-review/references/record-template.md) with the actual stage. The [walkthrough](local-walkthrough.md) provides configuration and reproducible commands.
+
+## Four-stage handoff
+
+| Stage | Input and work | Exit and failure destination |
+| --- | --- | --- |
+| Before PR | Original requirement/acceptance, trusted policy, permissions, relevant committed and uncommitted snapshot; plan required checks and open review perspectives. Real interaction and deterministic tests complement semantic review. | Report exact evidence, findings and gaps. Authorized designated implementer repairs; affected evidence expires and recheck consumes the same budget. Otherwise HOLD/REPLAN to the owner. |
+| During PR | Reconcile pre-PR evidence with actual base/head, workspace, configuration, artifact and coverage. CI, semantic review and security can run concurrently; risk/human conditions are a separate logical gate. | Only recommend integration after all applicable required evidence and decisions are valid. Candidates → evidence/counterevidence verification → deduplication/filtering → formal finding → verifiable disposition. No automatic comments or merge. |
+| At merge | Fixed latest base, candidate and predecessor/method identity; actual combination integration evidence; valid prior gates and approvals. Conflict resolution adding logic returns to review. | Prepare, preflight, execution authorization and receipt are separate. Expected-old/atomic conditions prevent drift between checks and application; drift requires replan/recheck, uncertain outcome requires query. Missing reliable protection is HOLD. |
+| After merge (optional) | Separate merge/deploy/release/exposure; independently select deployment, flags, channels, observation and recovery with owner/authority. Bind artifact, target, cohort, configuration and finite window. | Missing/stale/wrong/partial/NaN/insufficient samples cannot pass. At window end escalate gaps rather than monitor forever. Promotion prefers the same verified artifact; rebuild requires new identity and evidence. |
+
+Local diffs without a PR are supported. Risk follows actual impact, data/permissions, irreversibility and platform constraints, not filename or line count. Perspectives are open and composable, not a fixed ten-agent team. The coordinator controls assignment and shared budget; reviewers do not recursively create teams or modify shared checkout state. Independent context is not statistical independence.
+
+Severity, confidence, attribution, fact state and disposition remain separate. Existing/off-diff findings can matter; check evidence before filtering style or unrelated cleanup. Enforced rules and real performance/security effects are not dismissed as style. Deduplication retains disagreements and original observations; voting, author acceptance and absence on a later pass do not establish truth or repair. New facts can reopen a finding. Unresolved important disputes go to the qualified owner.
+
+Medium risk requires an eligible person's decision; high risk additionally needs multiple assigned independent review reports. Imported tool records do not fill human slots. Low-risk automatic stage progression is available only when the trusted project policy and authorization allow it. Review recommendation, merge permission and release permission are separate.
+
+Evidence is reusable only when version/configuration/artifact/environment/scope and policy remain applicable. No blanket rerun or blanket inheritance across stages. The local reference runner conservatively requires a new host-attested record for changed identities, preserving provenance. Same-source observations use host-attested observation time, not import order or opaque run IDs; equal-time conflicting assessments stay UNKNOWN. No fresh task or stage may clear old failures or reset consumed budgets. Pilot three rounds is a configurable limit, never a release guarantee.
+
+## Local execution and trust
+
+See [the lifecycle interface](../interfaces/lifecycle/README.md) and [optional B result interface](../interfaces/security-tools/README.md) for exact fields and commands. Default A remains an agent-host method without a new mandatory runtime; B is optional and does not install or run scanners. Required missing capability remains BLOCKED/NOT_RUN/UNKNOWN, not PASS/N_A. N_A requires a trusted applicability reason.
+
+The trusted host selects and protects policy/authority/ledger paths and verifies actual person eligibility and source authenticity. PR rules, reports, logs and adapters cannot expand permissions, weaken checks or self-approve governance changes. The runner verifies records and state relationships; it is not a semantic reviewer, authentication service, immutable archive or hostile-host sandbox. Preserve raw evidence bytes under host control and keep secrets out of model inputs and public logs. External calls remain subject to host permissions and accounting.
+
+Only the following backends exist:
+
+- PR records and B security-result import; no native hosted CI/SARIF fetcher or comment publisher.
+- LocalGit: marked isolated SHA-1 bare repository, merge_commit, real conditional ref update/query; no arbitrary user repository, hosted queue, squash/rebase or production branch adapter.
+- LocalSimulation: file-based delivery state, synthetic observations and human-decision examples; no real deployment/flag/metrics/recovery provider. Pausing automation does not reduce exposure; disabling exposure does not undo old data, migrations or notifications. Rollback requires established compatibility; forward-fix is a handoff, not a completed repair.
+
+Real providers need independent authorization, reliable idempotency/conditions and actual receipt verification. No login, credentials, installation, uploads, persistent permission or recurring monitoring are implied. Unselected delivery is NOT_RUN/HOLD without online acceptance; a selected required but unsupported capability remains a gap. Model fallback cannot silently cross data/receiver boundaries.
+
+## Verification scope
+
+This independent repository starts from a sanitized file-only snapshot; earlier private CI/PR records are not carried forward as new-version evidence. Read [verification scope](acceptance.md) and the exact current Actions run. Tests distinguish actual isolated Git from synthetic review/approval/delivery and injected faults. The small content example is not a complete application or production security review.
+
+Use `validation/run_checks.py --keep-artifacts` in this Git checkout when authorized to create and run self-owned disposable fixtures. It prints a new external receipt directory and retains fixtures. No historical run evidence is distributed. The method has no calibrated quality score, production readiness certification, real scanner efficacy claim or complete GUI/platform coverage. No evaluation corpus/scoring engine is included. The [source notes](sources.md) identify method references without requiring their installation.
+
+The [CI workflow](../.github/workflows/ci.yml) targets Ubuntu 24.04 / Python 3.9 and 3.13 and Windows 2025 x64 / Python 3.13 on main push, pull_request and manual dispatch. Checks bind to the run commit and include the repository entry, four stage entries, ordinary/optimized regression suites and distribution integrity; Python 3.13 jobs also run fixed guard-removal controls. See [platform limits](windows-support.md) and [version-bound acceptance](acceptance.md). There is no automatic deployment or policy change. Official checkout v7.0.1 and setup-python v7.1.0 are pinned to their verified full commit IDs. See [GitHub secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use) for read-only permissions and immutable Action pins. Actions history and logs become publicly readable when the repository is public, including older runs. Do not print private data or secrets into them; no raw test fixtures are uploaded as artifacts by this workflow.
