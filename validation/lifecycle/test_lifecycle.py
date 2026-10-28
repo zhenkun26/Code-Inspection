@@ -137,7 +137,11 @@ class Lifecycle(unittest.TestCase):
         self.approval('delivery-deploy',p['id']);state=json.loads((self.host/'sim-provider.json').read_text(encoding='utf-8'));state['revision']+=1;write(self.host,'sim-provider.json',state);self.run_cli('delivery-execute',operation=p['id'],code=2)
     def test_delivery_idempotency_and_lost_receipt(self):
         self.merged();p=self.action('deploy',{'artifact':'artifact-combined'},False);self.approval('delivery-deploy',p['id']);out=self.run_cli('delivery-execute',operation=p['id'])
-        state=json.loads((self.host/'state.json').read_text(encoding='utf-8'));state['delivery']['requests'][p['id']]={'result':'pending'};write(self.host,'state.json',state)
+        state=json.loads((self.host/'state.json').read_text(encoding='utf-8'))
+        request=state['delivery']['requests'][p['id']]
+        request['result']='pending'
+        request.pop('receipt_sha',None);request.pop('observed_at',None)
+        write(self.host,'state.json',state)
         again=self.run_cli('delivery-execute',operation=p['id']);self.assertEqual(out['state']['revision'],again['state']['revision']);self.assertEqual(again['result']['result'],'confirmed')
     def test_required_missing_capability(self):
         self.initialize();state=json.loads((self.host/'sim-provider.json').read_text(encoding='utf-8'));state['capabilities']=[];write(self.host,'sim-provider.json',state)

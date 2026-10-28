@@ -13,6 +13,7 @@ from validation.test_support import temporary_directory
 TESTS = ['security-integration/test_interface.py', 'security-integration/test_helpers.py',
          'security-integration/test_local_files.py', 'lifecycle/test_lifecycle.py',
          'lifecycle/test_review_regressions.py', 'lifecycle/test_delivery_regressions.py',
+         'lifecycle/test_merge_integrity.py', 'lifecycle/test_delivery_integrity.py',
          'lifecycle/test_demo.py', 'test_hygiene.py', 'test_native_files.py', 'test_codex_layout.py']
 
 

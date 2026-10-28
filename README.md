@@ -68,6 +68,8 @@ The included [CI definition](.github/workflows/ci.yml) is configured for pushes 
 
 The host protects trusted policy, authority and ledger directories. Reviewed content and logs cannot grant permissions; JSON actor names and hashes are not authentication or a sandbox. Required missing/stale/partial evidence remains an explicit gap. READY_FOR_NEXT does not authorize merge or release. See the shared [core contract](skills/pre-pr-review/references/contract.md).
 
+Stored merge/delivery plans and receipts are checked for exact intent and object/state consistency before execution or recovery. Unsafe legacy records require explicit replanning or migration; see [integrity and recovery compatibility](interfaces/lifecycle/README.md#计划完整性与恢复兼容性). These checks do not protect against a malicious writer controlling the trusted policy and approval store.
+
 ## Verification and project layout
 
 Validation uses the maintained local/CI entry, including ordinary and optimized Python, isolated Git demos, file safety and distribution checks. Results bind to the tested revision; see [verification scope](docs/acceptance.md) and the actual Actions run. Independent AI reviews are development activities, **not an installed automatic AI-review service**. Simulated approvals/delivery do not prove live platform acceptance.

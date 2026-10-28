@@ -41,6 +41,30 @@ CASES = [
     ('unrouted-resource', 'validation/pre-pr-review/structure_check.py',
      "require({root_relative / name for name in files if name != 'SKILL.md'} <= routed,\n            'unrouted resource')", 'None',
      'validation/security-integration/test_helpers.py', 'HelperSafetyTests.test_unrouted_resource_rejected'),
+    ('merge-plan-digest', 'interfaces/lifecycle/merge.py',
+     "require(plan['id']==digest({k:v for k,v in plan.items() if k!='id'}),'merge plan digest mismatch')", 'None',
+     'validation/lifecycle/test_merge_integrity.py', 'MergeIntegrity.test_every_plan_field_is_digest_bound'),
+    ('merge-parents', 'interfaces/lifecycle/merge.py',
+     "require(parent_headers==['parent '+plan['base'],'parent '+plan['head']],\n            'candidate ordered parents mismatch')", 'None',
+     'validation/lifecycle/test_merge_integrity.py', 'MergeIntegrity.test_exact_candidate_tree_and_ordered_parents_are_required'),
+    ('merge-combination', 'interfaces/lifecycle/merge.py',
+     "require(combined.returncode==0 and combined.stdout.splitlines() and combined.stdout.splitlines()[0]==plan['tree'],\n            'merge combination tree mismatch or unavailable')", 'None',
+     'validation/lifecycle/test_merge_integrity.py', 'MergeIntegrity.test_coherent_wrong_merge_tree_is_rejected_before_new_attempt'),
+    ('merge-receipt-intent', 'interfaces/lifecycle/merge.py',
+     "require(receipt['operation']==plan['id'] and all(receipt[name]==plan[name] for name in\n            ['repository','target_ref','policy_sha','base','candidate']),'merge receipt intent mismatch')", 'None',
+     'validation/lifecycle/test_merge_integrity.py', 'MergeIntegrity.test_mismatched_or_empty_receipts_never_confirm_or_retry'),
+    ('merge-known-cas-failure', 'interfaces/lifecycle/merge.py',
+     "result='failed' if x.returncode!=0 or actual==plan['base'] else 'confirmed'", "result='failed' if actual==plan['base'] else 'confirmed'",
+     'validation/lifecycle/test_merge_integrity.py', 'MergeIntegrity.test_failed_cas_same_candidate_never_confirms'),
+    ('delivery-plan-digest', 'interfaces/lifecycle/delivery.py',
+     "require(operation==digest({k:v for k,v in proposal.items() if k!='id'}),'delivery proposal digest mismatch')", 'None',
+     'validation/lifecycle/test_delivery_integrity.py', 'DeliveryIntegrity.test_canonical_payload_fields_and_map_key_are_checked'),
+    ('delivery-rollback-compatibility', 'interfaces/lifecycle/delivery.py',
+     "require(p.config['rollback_compatibility'].get(value['artifact'])==state['data_version'],\n                'BLOCKED: compatibility with current data not established')", 'None',
+     'validation/lifecycle/test_delivery_integrity.py', 'DeliveryIntegrity.test_fresh_rollback_rechecks_compatibility_and_module_capability'),
+    ('delivery-receipt-intent', 'interfaces/lifecycle/delivery.py',
+     "require(digest(receipt[key])==digest(intent[key]),'delivery receipt intent mismatch: '+key)", 'None',
+     'validation/lifecycle/test_delivery_integrity.py', 'DeliveryIntegrity.test_receipt_operation_mismatch_with_pending_request_is_rejected'),
 ]
 
 
@@ -74,13 +98,23 @@ def main():
         source = target.read_text(encoding='utf-8')
         if source.count(before) != 1:
             raise ValueError('mutation anchor must be unique: ' + name)
+        # The same copied dependency closure must pass before guard removal.
+        baseline = subprocess.run([sys.executable, '-B', test_file, test], cwd=copy, env=env,
+                                  text=True, capture_output=True, timeout=90)
+        (output / (name + '-baseline.log')).write_bytes((baseline.stdout + baseline.stderr).encode('utf-8'))
+        if baseline.returncode != 0:
+            record = {'mutation': name, 'result': 'NOT_VERIFIED', 'baseline_exit_code': baseline.returncode,
+                      'reason': 'unmodified control failed; mutation not run'}
+            results.append(record); print(json.dumps(record), flush=True)
+            continue
         (target).write_bytes((source.replace(before, after, 1)).encode('utf-8'))
         run = subprocess.run([sys.executable, '-B', test_file, test], cwd=copy, env=env,
                              text=True, capture_output=True, timeout=90)
         (output / (name + '.log')).write_bytes((run.stdout + run.stderr).encode('utf-8'))
         # An import/runtime error is not proof that the intended invariant was tested.
         killed = run.returncode == 1 and 'FAIL:' in run.stderr and 'ERROR:' not in run.stderr
-        record = {'mutation': name, 'result': 'KILLED' if killed else 'NOT_VERIFIED', 'exit_code': run.returncode}
+        record = {'mutation': name, 'result': 'KILLED' if killed else 'NOT_VERIFIED',
+                  'baseline_exit_code': baseline.returncode, 'exit_code': run.returncode}
         results.append(record)
         print(json.dumps(record), flush=True)
     (output / 'summary.json').write_bytes((json.dumps(results, indent=2)).encode('utf-8'))
