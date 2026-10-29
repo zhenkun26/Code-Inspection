@@ -74,7 +74,7 @@ class Session:
         self.policy = decode_json(raw)
         p = self.policy
         keys(p, ['schema','task_id','risk','checks','budget','humans','reviewers','high_expert_count',
-                 'low_auto','allowed_actions','merge','delivery'])
+                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content'])
         require(p['schema']=='lifecycle-policy/v1', 'policy schema')
         text(p['task_id']); require(p['risk'] in {'low','medium','high'}, 'risk')
         require(type(p['low_auto']) is bool, 'low_auto boolean')

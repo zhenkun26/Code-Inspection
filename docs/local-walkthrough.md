@@ -59,7 +59,7 @@ For optional B execution, the generated `fixture/host/policy.json` is a complete
 | Field group | Trusted source and responsibility |
 | --- | --- |
 | task ID, original requirements/acceptance and history references | User/task record; host preserves original references rather than relying solely on an implementer's summary. |
-| subject: base/head, workspace, CI config, artifact | Host reads actual Git and relevant staged/unstaged/untracked bytes; use recomputable digests. Artifact identity needs build/target evidence, not just source SHA. The tutorial computes its note/config digests; production artifact proof is not implemented. |
+| subject: base/head, workspace, CI config, artifact | Host reads actual Git and relevant staged/unstaged/untracked bytes; use recomputable digests. Artifact identity needs build/target evidence, not just source SHA. The tutorial computes its note/config digests; the optional [single-file binding](artifact-content.md) verifies bytes, while production build provenance remains host-declared. This tutorial stays label-only and does not exercise that opt-in capability. |
 | risk/checks/config/scope/applicability | User/host-approved project policy. PR text, new rule files, comments or tool logs cannot self-authorize a relaxed check. |
 | budget, reviewers, human eligibility, allowed actions | User/host planning; carry previous consumption. No universal reviewer/model/cost defaults. An action grant has its own precise binding and expiry. |
 | policy SHA and host root | Obtained from a trusted user/host channel and protected outside the reviewed tree; hashing an untrusted policy does not make it trusted. |

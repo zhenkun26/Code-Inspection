@@ -4,6 +4,7 @@ import math
 from interfaces.lifecycle.core import load, save, keys, text, subject, digest, timestamp, now, require
 from interfaces.lifecycle.merge import query as merge_query, validate_plan as merge_validate, validate_receipt as merge_receipt
 from interfaces.lifecycle.review import evaluate as pr_evaluate
+from interfaces.lifecycle import artifacts
 from datetime import timedelta
 
 CAPABILITY={'deploy':'deployment','flag-set':'flags','pause':'flags','promote':'channels',
@@ -96,10 +97,12 @@ def validate_plan(s,operation,provider,seen=None):
     text(operation);plans=s.state['delivery'].get('plans',{})
     require(isinstance(plans,dict) and operation in plans,'unknown operation')
     proposal=copy.deepcopy(plans[operation])
-    require(isinstance(proposal,dict) and proposal.get('schema')=='delivery-proposal/v2',
+    require(isinstance(proposal,dict) and proposal.get('schema') in {'delivery-proposal/v2','delivery-proposal/v3'},
             'legacy record requires explicit replan/migration: delivery proposal')
     keys(proposal,['schema','action','parameters','expected_provider','provider_snapshot',
-                   'policy_sha','subject','source','simulation','id'])
+                   'policy_sha','subject','source','simulation','id'],['artifact_content'])
+    require(('artifact_content' in proposal)==(proposal['schema']=='delivery-proposal/v3'),
+            'delivery content proposal schema mismatch')
     require(proposal['id']==operation,'delivery operation/map-key mismatch')
     hash_value(operation)
     require(operation==digest({k:v for k,v in proposal.items() if k!='id'}),'delivery proposal digest mismatch')
@@ -110,6 +113,8 @@ def validate_plan(s,operation,provider,seen=None):
     require(proposal['expected_provider']==digest(snapshot),'delivery provider snapshot digest mismatch')
     p=LocalSimulation(s);action_state(p,proposal,snapshot)
     source=proposal['source'];action=proposal['action'];value=proposal['parameters']
+    content=proposal.get('artifact_content')
+    if 'artifact_content' in proposal:artifacts.identity(content)
     seen=set() if seen is None else set(seen)
     require(operation not in seen,'delivery source cycle');seen.add(operation)
     if action=='deploy':
@@ -117,6 +122,9 @@ def validate_plan(s,operation,provider,seen=None):
         merged=historical_merge(s,source['merge_plan'])
         require(merged['source_subject']==proposal['subject'] and
                 merged['subject']['artifact_digest']==value['artifact'],'delivery merge source mismatch')
+        if content is not None:
+            require(content==merged.get('artifact_content'),'delivery merge content mismatch')
+            artifacts.validate(content,merged['source_subject'],merged['tree'],value['artifact'])
     elif action=='promote' or (action=='flag-set' and value['enabled']):
         keys(source,['merge_plan','deployment_operation']);text(source['merge_plan']);hash_value(source['deployment_operation'])
         deployed,_,receipt=validated_operation(s,source['deployment_operation'],provider,seen)
@@ -125,7 +133,17 @@ def validate_plan(s,operation,provider,seen=None):
                 and deployed['source']=={'merge_plan':source['merge_plan']}
                 and all(receipt['after'][k]==snapshot[k] for k in ['artifact','target']),
                 'HOLD: confirmed deployment source mismatch')
+        if content is not None:
+            require(content==deployed.get('artifact_content'),'delivery deployment content mismatch')
+            merged=historical_merge(s,source['merge_plan'])
+            artifacts.validate(content,merged['source_subject'],merged['tree'],snapshot['artifact'])
+    elif action=='rollback' and content is not None:
+        keys(source,['merge_plan']);text(source['merge_plan'])
+        merged=historical_merge(s,source['merge_plan'])
+        artifacts.validate(content,merged['source_subject'],merged['tree'],value['artifact'])
     else:keys(source,[])
+    require(content is None or action in {'deploy','promote','rollback'} or
+            (action=='flag-set' and value['enabled']),'delivery content action mismatch')
     # The nonrecursive snapshot still protects the complete prior operation map.
     prior={}
     for identifier,receipt in provider['operations'].items():
@@ -179,7 +197,14 @@ def validate_receipt(s,proposal,request,receipt,state):
             'legacy record requires explicit replan/migration: delivery receipt')
     intent=request_intent(proposal,receipt.get('requested_at'))
     fields=(set(intent)-{'schema'})|RECEIPT_FLAT|{'schema','after','observed_at','limitation'}
-    keys(receipt,fields)
+    content=proposal.get('artifact_content')
+    consumes=content is not None and proposal['action'] in {'deploy','rollback'}
+    keys(receipt,fields|({'consumed_content'} if consumes else set()))
+    if consumes:
+        consumed=receipt['consumed_content'];keys(consumed,['sha256','size_bytes'])
+        require(type(consumed['size_bytes']) is int and consumed=={
+                name:content['proof'][name] for name in ['sha256','size_bytes']},
+                'delivery consumed content mismatch')
     for key in set(intent)-{'schema','result'}:
         require(digest(receipt[key])==digest(intent[key]),'delivery receipt intent mismatch: '+key)
     require(receipt['result']=='confirmed','delivery provider receipt result')
@@ -249,19 +274,27 @@ class LocalSimulation:
         absent='not_applied' if digest(provider_snapshot(state))==proposal['expected_provider'] else 'unknown'
         if request and request['result']=='unknown':absent='unknown'
         return {'simulation':True,'operation':operation,'result':receipt if receipt is not None else
-                {'result':absent},'state':state}
-    def apply(self,plan):
+                {'result':absent},'state':state,
+                'content_binding':artifacts.report(proposal.get('artifact_content'))}
+    def apply(self,plan,snapshot=None):
         self.s.require_usable()
         state=self.read();proposal,request,receipt=validated_operation(self.s,plan['id'],state)
         require(digest(plan)==digest(proposal),'delivery apply proposal mismatch')
         if receipt is not None:return self.query(proposal['id'])
         require(request is not None and request['result']=='pending','delivery pending attempt required')
         fresh_conditions(self.s,self,proposal,state)
+        content=proposal.get('artifact_content')
+        consumes=content is not None and proposal['action'] in {'deploy','rollback'}
+        # Consume the caller's captured bytes; fresh eligibility never reopens them.
+        if consumes:artifacts.check_snapshot(snapshot,content)
+        else:require(snapshot is None,'delivery action does not consume an artifact snapshot')
         at=now().isoformat();after=expected_after(self,proposal,at)
         receipt={k:copy.deepcopy(v) for k,v in request.items() if k not in {'schema','result'}}
         receipt.update(schema='delivery-receipt/v2',result='confirmed',after=after,
                        observed_at=at,limitation=LIMITATION)
         receipt.update({k:copy.deepcopy(after[k]) for k in RECEIPT_FLAT})
+        if consumes:
+            receipt['consumed_content']={'sha256':snapshot.sha256,'size_bytes':snapshot.size_bytes}
         # Validate the constructed result before persisting any provider change.
         result_state=dict(after,operations=dict(state['operations'],**{proposal['id']:receipt}))
         validate_receipt(self.s,proposal,request,receipt,result_state)
@@ -352,18 +385,32 @@ def deployment_source(s,state):
 
 
 def fresh_conditions(s,p,proposal,state):
+    artifacts.policy_config(s)
     require(proposal['subject']==s.state['subject'],'stale delivery subject')
     action_state(p,proposal,state,fresh=True)
     require(digest(provider_snapshot(state))==proposal['expected_provider'],'HOLD: provider drift; replan before action')
     require(s.authorized('delivery-'+proposal['action'],proposal['id']),
             'BLOCKED: delivery action authority missing/revoked')
     action=proposal['action'];v=proposal['parameters']
+    if action in {'deploy','rollback'}:
+        artifacts.require_binding(s,'delivery-'+action,proposal.get('artifact_content'))
+    elif action=='promote' or (action=='flag-set' and v['enabled']):
+        artifacts.require_binding(s,'delivery-deploy',proposal.get('artifact_content'))
     if action in {'deploy','promote'} or (action=='flag-set' and v['enabled']):
         require(pr_evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: unresolved PR evidence or finding')
     if action=='deploy':
         require(proposal['source']=={'merge_plan':merge_source(s,v['artifact'])},'HOLD: merge relation changed')
+        merged=historical_merge(s,proposal['source']['merge_plan'])
+        require(proposal.get('artifact_content')==merged.get('artifact_content'),
+                'HOLD: merge content relation changed; replan')
+    if action=='rollback' and 'artifact_content' in proposal:
+        merged=historical_merge(s,proposal['source']['merge_plan'])
+        require(merge_receipt(s,merged)['result']=='confirmed','HOLD: confirmed historical rollback source required')
     if action=='promote' or (action=='flag-set' and v['enabled']):
         require(proposal['source']==deployment_source(s,state),'HOLD: deployment relation changed')
+        deployed=validate_plan(s,proposal['source']['deployment_operation'],state)
+        require(proposal.get('artifact_content')==deployed.get('artifact_content'),
+                'HOLD: deployment content relation changed; replan')
     if action=='promote' or (action=='flag-set' and v['enabled'] and v['cohort']!=p.config['initial_cohort']):
         require(p.config['capabilities']['observation']['enabled'] and observation_status(s,p,state)['status']=='PASS',
                 'HOLD: observation no longer valid')
@@ -371,16 +418,36 @@ def fresh_conditions(s,p,proposal,state):
 
 def plan(s,record):
     s.require_usable()
-    keys(record,['schema','action','parameters']);require(record['schema']=='delivery-plan/v1','delivery plan schema')
+    keys(record,['schema','action','parameters'],['artifact_content','artifact_source_merge'])
+    require(record['schema']=='delivery-plan/v1','delivery plan schema')
     action=record['action'];v=record['parameters'];parameters(action,v)
+    artifacts.policy_config(s)
+    require(('artifact_content' in record)==('artifact_source_merge' in record) and
+            ('artifact_content' not in record or action=='rollback'),
+            'rollback artifact descriptor and historical merge source required together')
     p=LocalSimulation(s);state=p.read()
     action_state(p,record,state,fresh=True)
     for operation in state['operations']:validated_operation(s,operation,state)
     if action in {'deploy','promote'} or (action=='flag-set' and v['enabled']):
         require(pr_evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: unresolved PR evidence or finding')
-    source={}
-    if action=='deploy':source={'merge_plan':merge_source(s,v['artifact'])}
-    if action=='promote' or (action=='flag-set' and v['enabled']):source=deployment_source(s,state)
+    source={};content=None
+    if action=='deploy':
+        source={'merge_plan':merge_source(s,v['artifact'])}
+        content=copy.deepcopy(historical_merge(s,source['merge_plan']).get('artifact_content'))
+    if action=='promote' or (action=='flag-set' and v['enabled']):
+        source=deployment_source(s,state)
+        content=copy.deepcopy(validate_plan(s,source['deployment_operation'],state).get('artifact_content'))
+    if action=='rollback' and 'artifact_content' in record:
+        text(record['artifact_source_merge'])
+        source={'merge_plan':record['artifact_source_merge']}
+        merged=historical_merge(s,source['merge_plan'])
+        require(merge_receipt(s,merged)['result']=='confirmed','HOLD: confirmed historical rollback source required')
+        content,_=artifacts.capture(s,record['artifact_content'],merged['source_subject'],merged['tree'])
+        require(v['artifact']==artifacts.identity(content),'UNKNOWN: rollback artifact content identity mismatch')
+    if action=='deploy':artifacts.fresh(s,'delivery-deploy',content)
+    elif action=='rollback':artifacts.require_binding(s,'delivery-rollback',content)
+    elif action=='promote' or (action=='flag-set' and v['enabled']):
+        artifacts.require_binding(s,'delivery-deploy',content)
     if action=='promote' or (action=='flag-set' and v['enabled'] and v['cohort']!=p.config['initial_cohort']):
         require(p.config['capabilities']['observation']['enabled'] and observation_status(s,p,state)['status']=='PASS',
                 'HOLD: valid observation required for promotion/expansion')
@@ -388,6 +455,7 @@ def plan(s,record):
     result={'schema':'delivery-proposal/v2','action':action,'parameters':copy.deepcopy(v),
             'expected_provider':digest(snapshot),'provider_snapshot':snapshot,'policy_sha':s.pin,
             'subject':copy.deepcopy(s.state['subject']),'source':source,'simulation':True}
+    if content is not None:result.update(schema='delivery-proposal/v3',artifact_content=content)
     result['id']=digest(result)
     s.charge(operation='delivery-plan');s.state['delivery'].setdefault('plans',{})[result['id']]=result
     s.event('delivery-plan',result);s.persist();return copy.deepcopy(result)
@@ -399,10 +467,14 @@ def execute(s,operation):
     # An existing exact attempt is queried, never replayed or charged again.
     if request is not None or receipt is not None:return p.query(operation)
     fresh_conditions(s,p,proposal,state)
+    snapshot=None
+    if proposal['action'] in {'deploy','rollback'}:
+        # Acquire before recording a new attempt, then pass these exact bytes to apply.
+        snapshot=artifacts.fresh(s,'delivery-'+proposal['action'],proposal.get('artifact_content'))
     s.charge(operation='delivery-execute');request=request_intent(proposal,now().isoformat())
     s.state['delivery'].setdefault('requests',{})[operation]=request
     s.event('delivery-requested',{'operation':operation});s.persist()
-    try:out=p.apply(proposal)
+    try:out=p.apply(proposal,snapshot=snapshot) if snapshot is not None else p.apply(proposal)
     except (ValueError,OSError):
         request['result']='unknown';s.persist();raise
     receipt=out['result']

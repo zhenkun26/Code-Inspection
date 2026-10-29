@@ -153,14 +153,17 @@ class Root:
     def __exit__(self, *exc):
         cleanup(self.stack.close, exc[1])
         return False
-    def read(self, relative, limit):
+    def read(self, relative, limit, single_link=False):
         from contextlib import ExitStack
         names = parts(relative)
         with ExitStack() as stack:
             parent = self.handle
             for name in names[:-1]: parent = stack.enter_context(opened(parent, name, directory=True))
             leaf = stack.enter_context(opened(parent, names[-1]))
-            need(check(leaf, False).EndOfFile <= limit, 'not a bounded regular file')
+            info = check(leaf, False)
+            need(info.EndOfFile <= limit, 'not a bounded regular file')
+            if single_link:
+                need(info.NumberOfLinks == 1, 'artifact hardlinks refused')
             result = bytearray()
             while len(result) <= limit:
                 buf = c.create_string_buffer(min(65536, limit+1-len(result))); count = ULONG()
@@ -168,6 +171,10 @@ class Root:
                 if not count.value: break
                 result.extend(buf.raw[:count.value])
             need(len(result) <= limit, 'file exceeds read limit')
+            if single_link:
+                after = check(leaf, False)
+                need(after.NumberOfLinks == 1 and after.EndOfFile == info.EndOfFile,
+                     'artifact changed during snapshot read')
             return bytes(result)
     @contextmanager
     def locked(self):

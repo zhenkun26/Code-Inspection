@@ -26,12 +26,12 @@ def checked_root(root):
     return root.resolve(strict=True)
 
 
-def read_bytes(root, relative, limit=1024 * 1024):
+def read_bytes(root, relative, limit=1024 * 1024, single_link=False):
     if os.name == 'nt':
         from support.windows_files import Root
         require(type(limit) is int and limit >= 0, 'nonnegative read limit required')
-        if isinstance(root, Root): return root.read(relative, limit)
-        with Root(root) as selected: return selected.read(relative, limit)
+        if isinstance(root, Root): return root.read(relative, limit, single_link=single_link)
+        with Root(root) as selected: return selected.read(relative, limit, single_link=single_link)
     root = checked_root(root)
     path = Path(relative)
     require(not path.is_absolute() and path.parts and
@@ -49,6 +49,8 @@ def read_bytes(root, relative, limit=1024 * 1024):
         descriptors.append(leaf)
         info = os.fstat(leaf)
         require(stat.S_ISREG(info.st_mode) and info.st_size <= limit, 'not a bounded regular file')
+        if single_link:
+            require(info.st_nlink == 1, 'artifact hardlinks refused')
         data = b''
         while len(data) <= limit:
             chunk = os.read(leaf, min(65536, limit + 1 - len(data)))
@@ -56,6 +58,10 @@ def read_bytes(root, relative, limit=1024 * 1024):
                 break
             data += chunk
         require(len(data) <= limit, 'file exceeds read limit')
+        if single_link:
+            after = os.fstat(leaf)
+            require(after.st_nlink == 1 and (after.st_size, after.st_mtime_ns, after.st_ctime_ns) ==
+                    (info.st_size, info.st_mtime_ns, info.st_ctime_ns), 'artifact changed during snapshot read')
         return data
     finally:
         for fd in reversed(descriptors):
