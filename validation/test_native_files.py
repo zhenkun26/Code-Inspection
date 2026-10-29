@@ -15,10 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from support.local_files import read_bytes, root_lock
 from interfaces.lifecycle.core import save
+from validation.test_support import temporary_directory
 
 class PortableFiles(unittest.TestCase):
     def test_unicode_spaces_and_crlf_bytes(self):
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             root = Path(d)/'中文 space'; root.mkdir()
             (root/'数据.txt').write_bytes(b'{"x":1}\r\n')
             self.assertEqual(read_bytes(root,'数据.txt'), b'{"x":1}\r\n')
@@ -26,7 +27,7 @@ class PortableFiles(unittest.TestCase):
             (root/'数据.txt').write_bytes(b'{"x":1}\n')
             self.assertNotEqual(old, hashlib.sha256(read_bytes(root,'数据.txt')).hexdigest())
     def test_lock_contention_and_exception_release(self):
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             code = "from pathlib import Path; from support.local_files import root_lock; import sys;\nwith root_lock(Path(sys.argv[1])): print('acquired',flush=True)"
             with root_lock(Path(d)):
                 p = subprocess.run([sys.executable,'-B','-c',code,d], cwd=ROOT, capture_output=True, text=True, timeout=10)
@@ -41,7 +42,7 @@ class PortableFiles(unittest.TestCase):
         def interrupt(process,*args,**kwargs):
             instances.append(process)
             raise KeyboardInterrupt('injected cancellation')
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             with self.assertRaises(KeyboardInterrupt):
                 with root_lock(Path(d)), patch.object(subprocess.Popen,'communicate',interrupt):
                     subprocess.run([sys.executable,'-c','import time; time.sleep(30)'],capture_output=True,timeout=5)
@@ -52,7 +53,7 @@ class PortableFiles(unittest.TestCase):
     def test_git_stdin_bytes_are_exact(self):
         from validation.lifecycle.fixture import create
         from interfaces.lifecycle.merge import LocalGit
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             f=create(Path(d)/'fixture')
             policy=json.loads((Path(f['host'])/'policy.json').read_text(encoding='utf-8'))
             g=LocalGit(policy['merge']);content='line one\nline two\n'
@@ -64,7 +65,7 @@ class PortableFiles(unittest.TestCase):
             self.assertEqual(g.run('cat-file','blob',expected).stdout,content)
 
     def test_state_flat_name_and_failed_replace(self):
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             root=Path(d);save(root,'state.json',{'old':True});old=(root/'state.json').read_bytes()
             for n in ['../x','x/y','x\\y','x:stream']:
                 with self.assertRaises(ValueError): save(root,n,{})
@@ -79,7 +80,7 @@ class PortableFiles(unittest.TestCase):
         finally:
             p.kill();out,err=p.communicate(timeout=5)
         self.assertIn(b'started',out);self.assertIsNotNone(p.poll())
-        with tempfile.TemporaryDirectory() as d:
+        with temporary_directory() as d:
             with self.assertRaises(KeyboardInterrupt):
                 with root_lock(Path(d)): raise KeyboardInterrupt()
             with root_lock(Path(d)): pass
@@ -88,8 +89,9 @@ class PortableFiles(unittest.TestCase):
 class WindowsFiles(unittest.TestCase):
     def setUp(self):
         from support import windows_files as wf
-        self.w=wf;self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
-    def tearDown(self): self.temp.cleanup()
+        self.w=wf;self.temp=temporary_directory()
+        self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
     def junction(self, link, target):
         # Fixed built-in command on self-owned paths, no changes to OS permissions.
         p=subprocess.run(['cmd.exe','/d','/c','mklink','/J',str(link),str(target)],capture_output=True,timeout=10)
@@ -228,6 +230,95 @@ class WindowsFiles(unittest.TestCase):
         finally:
             for h in held: w.close(h)
         for p in self.root.glob('.lifecycle-*'): p.unlink()
+
+
+class TemporaryDirectoryCompatibility(unittest.TestCase):
+    def setUp(self):
+        self.temp=temporary_directory()
+        self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+
+    def run_portable(self, name):
+        # Select real cases explicitly; never recursively load this module.
+        result=unittest.TestResult()
+        PortableFiles(name).run(result)
+        self.assertEqual(result.testsRun,1)
+        self.assertTrue(result.wasSuccessful(),result.errors+result.failures)
+
+    def test_portable_methods_use_module_shared_factory(self):
+        methods=['test_unicode_spaces_and_crlf_bytes',
+                 'test_lock_contention_and_exception_release',
+                 'test_cancelled_child_reaped_and_lock_released',
+                 'test_git_stdin_bytes_are_exact',
+                 'test_state_flat_name_and_failed_replace',
+                 'test_real_timeout_and_interrupt_cleanup']
+        for name in methods:
+            with self.subTest(method=name):
+                with patch(__name__+'.temporary_directory',wraps=temporary_directory) as factory:
+                    self.run_portable(name)
+                factory.assert_called_once_with()
+
+    def run_with_temp_policy(self, keep):
+        base=self.root/'explicit-parent';base.mkdir()
+        cached=self.root/'cached-parent';cached.mkdir()
+        sibling=base/'sibling-control';sibling.write_bytes(b'owned sibling')
+        created=[];factory=temporary_directory
+        def record():
+            directory=factory();created.append(Path(directory.name))
+            return directory
+        environment={'TMPDIR':str(base),'TEMP':str(base),
+                     'CODE_INSPECTION_KEEP_TEST_ARTIFACTS':keep}
+        with patch.dict(os.environ,environment),patch.object(tempfile,'tempdir',str(cached)):
+            with patch(__name__+'.temporary_directory',side_effect=record) as shared:
+                self.run_portable('test_unicode_spaces_and_crlf_bytes')
+            shared.assert_called_once_with()
+        self.assertEqual(len(created),1)
+        self.assertEqual(created[0].parent,base.resolve())
+        self.assertEqual(list(cached.iterdir()),[])
+        self.assertEqual(sibling.read_bytes(),b'owned sibling')
+        return created[0]
+
+    def test_keep_on_retains_real_portable_fixture_in_explicit_external_root(self):
+        directory=self.run_with_temp_policy('1')
+        self.assertTrue(directory.is_dir())
+        self.assertEqual((directory/'中文 space'/'数据.txt').read_bytes(),b'{"x":1}\n')
+
+    def test_keep_off_cleans_only_real_portable_fixture_in_explicit_external_root(self):
+        directory=self.run_with_temp_policy('0')
+        self.assertFalse(directory.exists())
+
+    def test_real_portable_method_refuses_explicit_checkout_temp_base(self):
+        for base in [ROOT,ROOT/'validation']:
+            with self.subTest(base=base):
+                environment={'TMPDIR':str(base),'TEMP':str(base),
+                             'CODE_INSPECTION_KEEP_TEST_ARTIFACTS':'1'}
+                # Even a broken factory must not write the negative control into the checkout.
+                with patch.dict(os.environ,environment),patch.object(tempfile,'tempdir',str(self.root)):
+                    with self.assertRaisesRegex(ValueError,'outside the checkout'):
+                        PortableFiles('test_unicode_spaces_and_crlf_bytes').test_unicode_spaces_and_crlf_bytes()
+
+    def test_windows_fixture_uses_shared_factory_and_cleanup_survives_setup_failure(self):
+        # Fixture wiring only: an inert import sentinel exercises no Windows APIs.
+        environment={'TMPDIR':str(self.root),'TEMP':str(self.root),
+                     'CODE_INSPECTION_KEEP_TEST_ARTIFACTS':'0'}
+        for fail_setup in [False,True]:
+            with self.subTest(fail_setup=fail_setup):
+                case=WindowsFiles('test_abi_and_names')
+                self.addCleanup(case.doCleanups)
+                with patch.dict(os.environ,environment),patch('support.windows_files',object(),create=True):
+                    with patch(__name__+'.temporary_directory',wraps=temporary_directory) as factory:
+                        if fail_setup:
+                            with patch(__name__+'.Path',side_effect=RuntimeError('injected fixture setup failure')):
+                                with self.assertRaisesRegex(RuntimeError,'fixture setup failure'): case.setUp()
+                        else:
+                            case.setUp()
+                    factory.assert_called_once_with()
+                directory=Path(case.temp.name)
+                self.addCleanup(case.temp.cleanup)
+                self.assertEqual(directory.parent,self.root.resolve())
+                self.assertTrue(directory.is_dir())
+                self.assertTrue(case.doCleanups())
+                self.assertFalse(directory.exists())
 
 
 if __name__=='__main__': unittest.main(verbosity=2)
