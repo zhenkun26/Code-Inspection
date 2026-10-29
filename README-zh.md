@@ -66,6 +66,8 @@ python3 -B validation/mutation_check.py
 
 较大的生命周期套件在每种 Python 模式下分为两个互不重复、覆盖完整的组，保留每条命令 180 秒上限。超时作为失败保存部分输出，剩余检查保持 NOT_RUN；这不证明所有后代进程都已终止。见 [验证限制](docs/acceptance.md)。
 
+分发检查会先拒绝不安全选集，再复用有界、不跟随链接的读取层。测试 fixture 统一遵循外部目录和 KEEP 策略。[验证契约](docs/acceptance.md#distribution-read-boundaries) 说明文件、数量、聚合上限及剩余信任边界。
+
 附带的 [CI定义](.github/workflows/ci.yml) 配置了main推送、PR及手动触发，矩阵为Ubuntu24.04的Python3.9和3.13，加Windows2025x64的Python3.13。每项检查普通与优化模式，含两种完整示范、结构、安全边界、链接及精确摘要覆盖；Python3.13另跑固定保护条件移除检查。工作流仅有仓库只读权限，官方Actions固定SHA，无仓库秘密或部署步骤。请到 [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) 核对精确版本，其他仓库的历史运行不能转作当前证据；CI绿色不等于生产验收；其他runner组合不在该矩阵；Windows支持以原生安全用例完成为条件，不改系统权限或静默跳过。主动修改文件后，更新覆盖全部选定文件（除自身）的 `SHA256SUMS`。
 
 宿主保护政策、权限和账本目录；被审内容及日志不能扩权。JSON人名及摘要不是认证或沙箱。必需证据缺失、过时或不完整时保留缺口；READY_FOR_NEXT不授予合并或发布权限。见 [共享核心契约](skills/pre-pr-review/references/contract.md)。
