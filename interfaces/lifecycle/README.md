@@ -130,4 +130,8 @@ python3 -B validation/lifecycle/test_lifecycle.py
 python3 -O -B validation/lifecycle/test_lifecycle.py
 ```
 
-测试只有自有记录、真实隔离裸 Git、模拟交付三类，不是真实 CI/模型/生产 provider 验收。测试产生的结果位于仓库外的新临时目录，不再覆盖 validation/lifecycle/results/ 的历史文件。设置 CODE_INSPECTION_KEEP_TEST_ARTIFACTS=1 可保留测试目录；统一运行入口 python3 -B validation/run_checks.py --keep-artifacts 会输出日志目录；不会更新本项目 Git refs、创建提交或设置远端。发布需显式选择三个 Skill 入口、本接口模块/说明、共享 support、它们引用的核心契约和设计文档；测试源另选，不包含 host-root、真实结果/权限/数据或私人 reference。详细实际结果和限制见 [实施验收](../../docs/workflow.md)。
+测试只有自有记录、真实隔离裸 Git、模拟交付三类，不是真实 CI/模型/生产 provider 验收。测试产生的结果位于仓库外的新临时目录，不再覆盖 validation/lifecycle/results/ 的历史文件。设置 CODE_INSPECTION_KEEP_TEST_ARTIFACTS=1 可保留测试目录；统一运行入口 python3 -B validation/run_checks.py --keep-artifacts 会输出日志目录；不会更新本项目 Git refs、创建提交或设置远端。发布需显式选择四个阶段 Skill 入口及仓库路由入口、本接口模块/说明、共享 support、它们引用的核心契约和设计文档；测试源另选，不包含 host-root、真实结果/权限/数据或私人 reference。详细实际结果和限制见 [实施验收](../../docs/workflow.md)。
+
+## 强制终止后的临时文件
+
+`temp-report` 提供持锁、有界、仅元数据的残留检查，不依赖账本可解析。它不删除、恢复或重放任何记录，也不判断预算或批准有效性。所有历史残留归属均为 UNKNOWN，保留待宿主处理。具体命令、上限和后续清理前提见 [临时状态检查](../../docs/temporary-state.md)。

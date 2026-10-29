@@ -19,10 +19,14 @@ def main():
     p.add_argument('--operation',help='exact planned delivery operation ID')
     p.add_argument('command',choices=['init','begin-review','ingest','import-security','adjudicate','advance','pr-status','export',
         'merge-prepare','merge-preflight','merge-execute','merge-query','delivery-plan','delivery-execute',
-        'delivery-query','observe','delivery-status'])
+        'delivery-query','observe','delivery-status','temp-report'])
     args=p.parse_args()
     metrics=InvocationMetrics();s=None
     try:
+        if args.command=='temp-report':
+            from interfaces.lifecycle.temporary import report
+            out=report(args.host_root,args.policy_sha)
+            print(json.dumps(out,ensure_ascii=True,indent=2,allow_nan=False));return 0
         s=Session(args.host_root,args.policy_sha,metrics=metrics)
         with s.locked():
             if args.command=='init':

@@ -53,6 +53,8 @@ python3 -B examples/lifecycle_demo.py --simulate-approvals --with-delivery
 - [支持与验收证据](docs/acceptance.md)
 - [来源与许可范围](docs/sources.md)
 
+显式的[临时状态检查](docs/temporary-state.md)在宿主锁内报告强制终止留下的残留，不读取其内容，也不删除文件。这是恢复辅助信息，不是自动清理或待定动作成功的证据。
+
 ## 前提与检查
 
 默认A为Markdown加现有Agent宿主，无新增必需第三方运行依赖。宿主/模型可能收费，或向获授权provider发送数据；低依赖不保证离线。可选B使用Python3.9+标准库及POSIX不跟随符号链接读取/锁，或 [平台支持](docs/windows-support.md) 中的原生Windows后端，隔离Git操作需要支持 `merge-tree --write-tree` 的Git。辅助程序仅可运行受信自有fixture。
