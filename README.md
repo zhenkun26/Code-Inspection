@@ -76,6 +76,8 @@ Stored merge/delivery plans and receipts are checked for exact intent and object
 
 Check results retain optional failures separately from blocking decisions. N_A requires a current, scoped host applicability record; a legacy reason alone becomes UNKNOWN. CLI budget reports separate existing ledger capacity, observed work in this invocation and unknown external costs. Capacity is not authorization, and safe receipt queries remain available after exhaustion. See the [record and accounting contract](interfaces/lifecycle/README.md).
 
+Optional [single-file artifact binding](docs/artifact-content.md) checks actual bytes and binds source/tree/configuration associations to new plans. Trusted policy selects required actions; legacy labels remain unverified. Delivery consumes the same bounded in-memory snapshot it verifies, while the provider remains a local simulation. Build provenance and writer isolation are host assertions, not authentication.
+
 New charged attempts save a versioned started record with the counter increment; started does not mean the action succeeded. A failed ledger save leaves durability unknown and fences that Session until a validated reload. Old usage is preserved without invented history, and accepted-operation recovery remains uncharged.
 
 ## Verification and project layout
