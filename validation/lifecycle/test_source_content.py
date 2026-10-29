@@ -1,7 +1,7 @@
 """Scoped source binding and exact historical recovery in self-owned fixtures.
 
 No build, scanner, remote provider or real human decision is authenticated here.
-New source capture is POSIX-only; existing legacy/single-file paths stay portable.
+New source capture has platform-specific mode models; historical validation stays pure.
 """
 import copy
 import hashlib
@@ -49,19 +49,14 @@ class LegacySourceCompatibility(unittest.TestCase):
             self.assertFalse(output['authorizes_action'])
             self.assertEqual({name: (host / name).read_bytes() for name in before}, before)
             self.assertFalse((host / 'state.json').exists())
-            if os.name == 'nt':
-                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-                self.assertEqual(output['status'], 'UNKNOWN')
-                self.assertIn('unsupported source manifest platform', output['reason'])
-            else:
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertEqual(output['current_source_status'], 'PASS')
-                self.assertEqual(output['build_provenance'], 'UNKNOWN')
-                for field in core.SUBJECT - {'worktree_digest'}:
-                    self.assertEqual(output['subject'][field], handoff['subject'][field])
-                self.assertNotEqual(output['subject']['worktree_digest'], handoff['subject']['worktree_digest'])
-                with patch.object(manifests, 'capture', side_effect=AssertionError('pure validation read source')):
-                    source_content.validate(output['source_content'], output['subject'])
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(output['current_source_status'], 'PASS')
+            self.assertEqual(output['build_provenance'], 'UNKNOWN')
+            for field in core.SUBJECT - {'worktree_digest'}:
+                self.assertEqual(output['subject'][field], handoff['subject'][field])
+            self.assertNotEqual(output['subject']['worktree_digest'], handoff['subject']['worktree_digest'])
+            with patch.object(manifests, 'capture', side_effect=AssertionError('pure validation read source')):
+                source_content.validate(output['source_content'], output['subject'])
 
     def test_legacy_initialize_and_review_do_not_collect_source(self):
         with temporary_directory() as temp:
@@ -76,7 +71,6 @@ class LegacySourceCompatibility(unittest.TestCase):
                 self.assertEqual(review.evaluate(s)['recommendation'], 'HOLD')
 
 
-@unittest.skipIf(os.name == 'nt', 'N_A: new source capture is explicitly POSIX-only')
 class SourceContent(unittest.TestCase):
     def setUp(self):
         self.temp = temporary_directory()
@@ -113,6 +107,7 @@ class SourceContent(unittest.TestCase):
         config.write_text(config.read_text(encoding='utf-8').replace('bare = true', 'bare = false'), encoding='utf-8')
         (self.source / '.git' / 'HEAD').write_text(self.subject['head'] + '\n', encoding='ascii')
         self.source_git('read-tree', '--reset', '-u', self.subject['head'])
+        if os.name == 'nt': self.source_git('config', 'core.filemode', 'false')
         self.config['mode'] = 'git-worktree'
 
     def head_message_lifecycle(self, message):

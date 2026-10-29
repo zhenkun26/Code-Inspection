@@ -92,16 +92,16 @@ def check(handle, directory):
     return info
 
 @contextmanager
-def opened(parent, name, directory=False, create=False, lock=False):
+def opened(parent, name, directory=False, create=False, lock=False, *, pin=False, listing=False):
     component(name)
     raw = name.encode('utf-16-le'); buffer = c.create_string_buffer(raw + b'\0\0')
     string = UnicodeString(len(raw), len(raw)+2, c.addressof(buffer))
     attrs = Attributes(c.sizeof(Attributes), parent, c.pointer(string), OBJ_DONT_REPARSE, None, None)
     handle = HANDLE(); status = IoStatus()
-    access = DIR_ACCESS if directory else FILE_READ | (2 if lock else 0)
+    access = (DIR_ACCESS | (1 if listing else 0)) if directory else FILE_READ | (2 if lock else 0)
     # Synchronous handle, no reparse traversal; force directory/non-directory type.
     result = NtCreateFile(c.byref(handle), access, c.byref(attrs), c.byref(status), None, 0,
-                          3 if lock else 7 if directory else 1, 3 if create else 1,
+                          3 if lock or (directory and pin) else 7 if directory else 1, 3 if create else 1,
                           0x20 | (1 if directory else 0x40), None, 0)
     if result != 0:
         if result & 0xffffffff in {0xC00000BA, 0xC0000103}:
@@ -114,7 +114,7 @@ def opened(parent, name, directory=False, create=False, lock=False):
         cleanup(lambda: close(handle), sys.exc_info()[1])
 
 class Root:
-    def __init__(self, root):
+    def __init__(self, root, *, pin=False, listing=False):
         raw = os.fspath(root)
         need(not raw.startswith(('\\', '/')) and not re.match(r'^[A-Za-z]:(?:$|[^\\/])', raw),
              'local absolute Windows root required')
@@ -125,6 +125,7 @@ class Root:
         self.path = Path(raw)
         self.names = [component(p) for p in raw[3:].split('\\') if p]
         self.drive = raw[:3]; self.stack = None; self.handle = None
+        self.pin = pin; self.listing = listing; self.handles = []
     def __fspath__(self): return str(self.path)
     def __truediv__(self, name): return self.path / name
     def __enter__(self):
@@ -138,13 +139,17 @@ class Root:
              'mapped/unsupported volume refused')
         stack = ExitStack()
         try:
-            h = CreateFile(self.drive, DIR_ACCESS, 7, None, 3, 0x02000000 | 0x00200000, None)
+            h = CreateFile(self.drive, DIR_ACCESS | (1 if self.listing else 0),
+                           3 if self.pin else 7, None, 3, 0x02000000 | 0x00200000, None)
             if h == c.c_void_p(-1).value: raise c.WinError(c.get_last_error())
             stack.callback(close, h); check(h, True)
             fs = c.create_unicode_buffer(32)
             wincheck(VolumeInfo(h, None, 0, None, None, None, fs, len(fs)))
             need(fs.value == 'NTFS', 'only local fixed NTFS volumes supported')
-            for name in self.names: h = stack.enter_context(opened(h, name, directory=True))
+            self.handles = [h]
+            for name in self.names:
+                h = stack.enter_context(opened(h, name, directory=True, pin=self.pin, listing=self.listing))
+                self.handles.append(h)
             self.handle = h; self.stack = stack
             return self
         except BaseException as primary:
