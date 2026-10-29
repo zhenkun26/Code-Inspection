@@ -41,18 +41,16 @@ class SourceManifestTests(unittest.TestCase):
 
     def test_directory_actual_bytes_and_mode(self):
         (self.root/'a').write_bytes(b'one')
-        if os.name == 'nt':
-            with self.assertRaisesRegex(ValueError, 'unsupported'): self.api.capture(self.root, config())
-            return
         first = self.api.capture(self.root, config())
         self.assertEqual(first, self.api.capture(self.root, config()))
         (self.root/'a').write_bytes(b'two')
         second = self.api.capture(self.root, config())
         self.assertNotEqual(self.api.identity(first), self.api.identity(second))
-        (self.root/'a').chmod(0o755)
-        self.assertNotEqual(self.api.identity(second), self.api.identity(self.api.capture(self.root, config())))
+        (self.root/'a').chmod(0o444 if os.name == 'nt' else 0o755)
+        try: self.assertNotEqual(self.api.identity(second), self.api.identity(self.api.capture(self.root, config())))
+        finally: (self.root/'a').chmod(0o666)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only; refusal tested separately')
+
     def test_staged_unstaged_deletion_and_untracked(self):
         head = self.repo()
         clean = self.api.capture(self.root, config('git-worktree'), base=head, head=head)
@@ -67,7 +65,7 @@ class SourceManifestTests(unittest.TestCase):
         deleted = self.api.capture(self.root, config('git-worktree'), base=head, head=head)
         self.assertIsNone(next(x for x in deleted['entries'] if x['path']=='a')['worktree'])
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_ignored_requires_explicit_exclusion(self):
         head = self.repo(); (self.root/'.gitignore').write_text('secret\n'); (self.root/'secret').write_bytes(b'private')
         with self.assertRaisesRegex(ValueError, 'ignored'): self.api.capture(self.root, config('git-worktree'), base=head, head=head)
@@ -92,12 +90,31 @@ class SourceManifestTests(unittest.TestCase):
         snapshot['entries'][0]['sha256']='not-a-hash'
         with self.assertRaises(ValueError): self.api.validate(snapshot)
 
+    def test_windows_mode_model_is_pure_and_distinct(self):
+        import copy, hashlib
+        payload = b'bytes'
+        h = dict(oid='1'*40, sha256=hashlib.sha256(payload).hexdigest(), size_bytes=5, mode=0o100755)
+        sample = dict(schema='source-manifest/v1', mode_model='windows-readonly/v1',
+                      config=config('git-worktree'), base='1'*40, head='2'*40, head_tree='3'*40,
+                      directories=[], entries=[dict(path='a', head=h, index=dict(h),
+                      worktree=dict(mode=0, size_bytes=5, sha256=h['sha256']))])
+        try: identity = self.api.identity(sample)
+        except ValueError as exc: self.fail('Windows stored mode model is unsupported: '+str(exc))
+        self.assertTrue(self.api.committed(sample))
+        readonly = copy.deepcopy(sample); readonly['entries'][0]['worktree']['mode']=1
+        self.assertNotEqual(identity, self.api.identity(readonly))
+        self.assertTrue(self.api.committed(readonly))
+        staged = copy.deepcopy(sample); staged['entries'][0]['index']['mode']=0o100644
+        self.assertFalse(self.api.committed(staged))
+        bad = copy.deepcopy(sample); bad['entries'][0]['worktree']['mode']=0o666
+        with self.assertRaises(ValueError): self.api.validate(bad)
+        bad = copy.deepcopy(sample); bad['directories']=[dict(path='.',kind='directory',mode=2)]
+        with self.assertRaises(ValueError): self.api.validate(bad)
+
     def test_platform_refusal_and_pure_validator(self):
         sample = {'schema':'source-manifest/v1','mode_model':'posix-permissions/v1',
                   'config':config(), 'entries':[]}
         self.assertEqual(len(self.api.validate(sample)), 64)
-        with patch.object(self.api.os, 'name', 'nt'):
-            with self.assertRaisesRegex(ValueError, 'unsupported'): self.api.capture(self.root, config())
         sample['mode_model']='invented'
         with self.assertRaises(ValueError): self.api.validate(sample)
         sample['mode_model']='posix-permissions/v1'
@@ -107,7 +124,7 @@ class SourceManifestTests(unittest.TestCase):
         sample['entries']=[{'path':'secret','kind':'directory','mode':0o755}]
         with self.assertRaises(ValueError): self.api.validate(sample)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_scope_empty_directory_exclusion_and_nested_repo(self):
         (self.root/'empty').mkdir(); (self.root/'secret').write_bytes(b'private')
         result = self.api.capture(self.root, config(exclusions=['secret']))
@@ -145,7 +162,7 @@ class SourceManifestTests(unittest.TestCase):
         with patch.object(self.api, '_read', side_effect=swapped):
             with self.assertRaises((OSError, ValueError)): self.api.capture(self.root, config(scope=['inside']))
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_ignored_payload_never_read_and_limits_preflight(self):
         head = self.repo(); (self.root/'.gitignore').write_text('secret\n'); (self.root/'secret').write_bytes(b'private')
         with patch.object(self.api, '_read', wraps=self.api._read) as read, patch.object(self.api, '_blobs', wraps=self.api._blobs) as blobs:
@@ -155,7 +172,7 @@ class SourceManifestTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.api.capture(self.root, config(max_files=1))
             read.assert_not_called()
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_blob_size_preflight_before_batch_payload(self):
         head = self.repo(); (self.root/'a').write_bytes(b'x'*100); self.git('add','a'); self.git('commit','-m','large')
         head = self.git('rev-parse','HEAD'); (self.root/'a').write_bytes(b'x')
@@ -168,7 +185,7 @@ class SourceManifestTests(unittest.TestCase):
         self.assertIn(('cat-file','--batch-check'), calls)
         self.assertNotIn(('cat-file','--batch'), calls)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_deleted_ignored_index_and_head_payload_not_read(self):
         head=self.repo(); (self.root/'a').unlink(); (self.root/'.gitignore').write_text('a\n')
         with patch.object(self.api, '_blobs', wraps=self.api._blobs) as blobs:
@@ -178,7 +195,7 @@ class SourceManifestTests(unittest.TestCase):
         result=self.api.capture(self.root,config('git-worktree',exclusions=['a']),base=head,head=head)
         self.assertNotIn('a',[entry['path'] for entry in result['entries']])
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_git_flags_layout_config_and_lfs_fail(self):
         head = self.repo(); self.git('update-index','--assume-unchanged','a')
         with self.assertRaisesRegex(ValueError, 'stage/flags'): self.api.capture(self.root, config('git-worktree'), base=head, head=head)
@@ -193,7 +210,7 @@ class SourceManifestTests(unittest.TestCase):
         (self.root/'.git').rename(self.root/'metadata'); (self.root/'.git').write_text('gitdir: metadata\n')
         with self.assertRaises(ValueError): self.api.capture(self.root, config('git-worktree', exclusions=['metadata']), base=head, head=head)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_git_identity_dirty_states_and_bounded_output(self):
         head = self.repo()
         snapshot = self.api.capture(self.root, config('git-worktree'), base=head, head=head)
@@ -207,7 +224,7 @@ class SourceManifestTests(unittest.TestCase):
         reader=self.api._Git(self.root,None)
         with self.assertRaisesRegex(ValueError, 'output limit'): reader.run('cat-file','-p',head,limit=1)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_git_metrics_and_logical_aggregate_bound(self):
         from interfaces.lifecycle.accounting import InvocationMetrics
         head=self.repo(); metrics=InvocationMetrics()
@@ -216,7 +233,7 @@ class SourceManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'byte limit'):
             self.api.capture(self.root, config('git-worktree',max_total_bytes=10),base=head,head=head)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX manifest backend only')
+
     def test_index_and_worktree_changes_are_separate(self):
         head=self.repo()
         def entry(): return next(x for x in self.api.capture(self.root,config('git-worktree'),base=head,head=head)['entries'] if x['path']=='a')

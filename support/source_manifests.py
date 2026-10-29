@@ -1,4 +1,4 @@
-"""Bounded optional source observations; trusted host, POSIX ordinary checkouts.
+"""Bounded optional source observations; trusted host, ordinary checkouts.
 
 No snapshot atomicity or build-provenance claim. Host controls Git metadata and
 writers throughout capture. Unsupported layouts fail; historical validation is
@@ -109,9 +109,11 @@ def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False).encode()
 
 
-def _file(value, config, git=False):
+def _file(value, config, git=False, windows=False):
     _keys(value, {'mode', 'size_bytes', 'sha256'} | ({'oid'} if git else set()))
-    require(type(value['mode']) is int and (value['mode'] in {0o100644, 0o100755} if git else 0 <= value['mode'] <= 0o7777),
+    require(type(value['mode']) is int, 'UNKNOWN: unsupported manifest mode')
+    valid_mode = value['mode'] in {0o100644, 0o100755} if git else (value['mode'] in {0,1} if windows else 0 <= value['mode'] <= 0o7777)
+    require(type(value['mode']) is int and valid_mode,
             'UNKNOWN: unsupported manifest mode')
     require(type(value['size_bytes']) is int and 0 <= value['size_bytes'] <= config['max_file_bytes'],
             'UNKNOWN: manifest file limit')
@@ -125,7 +127,8 @@ def validate(manifest):
     config = manifest.get('config'); _config(config)
     git = config['mode'] == 'git-worktree'
     _keys(manifest, {'schema', 'mode_model', 'config', 'entries'} | ({'base','head','head_tree','directories'} if git else set()))
-    require(manifest['schema'] == 'source-manifest/v1' and manifest['mode_model'] == 'posix-permissions/v1', 'UNKNOWN: manifest schema/mode model')
+    require(manifest['schema'] == 'source-manifest/v1' and manifest['mode_model'] in {'posix-permissions/v1','windows-readonly/v1'}, 'UNKNOWN: manifest schema/mode model')
+    windows = manifest['mode_model'] == 'windows-readonly/v1'
     if git:
         for key in ('base', 'head', 'head_tree'):
             _sha(manifest[key], 40); require(manifest[key]!='0'*40, 'UNKNOWN: nonzero Git identity required')
@@ -142,15 +145,15 @@ def validate(manifest):
             require(any(item[k] is not None for k in ('head','index','worktree')), 'UNKNOWN: empty Git projection')
             for key in ('head','index','worktree'):
                 if item[key] is not None:
-                    _file(item[key], config, git=key != 'worktree')
+                    _file(item[key], config, git=key != 'worktree', windows=windows)
                     total += item[key]['size_bytes']
         else:
             directory = item.get('kind') == 'directory'
             _keys(item, {'path','kind','mode'} | (set() if directory else {'size_bytes','sha256'}))
             require(item['kind'] in {'directory','file'}, 'UNKNOWN: manifest entry kind')
-            require(type(item['mode']) is int and 0 <= item['mode'] <= 0o7777, 'UNKNOWN: filesystem mode')
+            require(type(item['mode']) is int and (item['mode'] in {0,1} if windows else 0 <= item['mode'] <= 0o7777), 'UNKNOWN: filesystem mode')
             if not directory:
-                _file({k:v for k,v in item.items() if k not in {'path','kind'}}, config)
+                _file({k:v for k,v in item.items() if k not in {'path','kind'}}, config, windows=windows)
                 total += item['size_bytes']
     require(paths == sorted(set(paths), key=lambda x:x.encode('utf-8')), 'UNKNOWN: canonical unique manifest paths required')
     if git:
@@ -160,7 +163,7 @@ def validate(manifest):
         for directory in directories:
             _keys(directory, {'path','kind','mode'}); _path(directory['path'], root=True)
             require(directory['kind']=='directory' and _included(directory['path'], config)
-                    and type(directory['mode']) is int and 0 <= directory['mode'] <= 0o7777,
+                    and type(directory['mode']) is int and (directory['mode'] in {0,1} if windows else 0 <= directory['mode'] <= 0o7777),
                     'UNKNOWN: directory projection')
             directory_paths.append(directory['path'])
         require(directory_paths == sorted(set(directory_paths), key=lambda x:x.encode('utf-8'))
@@ -187,7 +190,8 @@ def committed(manifest):
         h, i, w = (entry[k] for k in ('head','index','worktree'))
         if h is None or i is None or w is None: return False
         if h != i or any(h[k] != w[k] for k in ('sha256','size_bytes')): return False
-        if h['mode'] != (0o100755 if w['mode'] & 0o100 else 0o100644): return False
+        if manifest['mode_model'] == 'posix-permissions/v1':
+            if h['mode'] != (0o100755 if w['mode'] & 0o100 else 0o100644): return False
     return True
 
 
@@ -275,6 +279,12 @@ class _Git:
                 '-c','protocol.allow=never', *args]
         with tempfile.TemporaryFile() as incoming:
             incoming.write(input); incoming.seek(0)
+            if os.name == 'nt':
+                from support.bounded_process import run
+                result = run(argv, stdin=incoming, env=self.env, stdout_limit=limit,
+                             stderr_limit=8192, timeout=10, deadline=self.started+30)
+                require(result.returncode in accepted, 'UNKNOWN: Git capture command failed')
+                return result.stdout
             process = subprocess.Popen(argv, stdin=incoming, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=self.env)
             output = bytearray(); errors = bytearray(); deadline = min(self.started+30, time.monotonic()+10)
             try:
@@ -317,6 +327,9 @@ def _metadata(root):
         else: raise ValueError('UNKNOWN: unsupported Git config section')
     require('core' in cp and cp['core'].get('repositoryformatversion') == '0'
             and cp['core'].get('bare') == 'false', 'UNKNOWN: ordinary SHA-1 checkout required')
+    if os.name == 'nt':
+        require(cp['core'].get('filemode', '').lower() == 'false',
+                'UNKNOWN: Windows source requires explicit core.filemode=false')
     return raw, read_bytes(root, '.git/HEAD', limit=4096, single_link=True), read_bytes(root, '.git/index', limit=MAX_MANIFEST, single_link=True)
 
 
@@ -392,17 +405,40 @@ def _blobs(git, objects, config, filesystem_bytes):
     return result
 
 
+class _PosixSource:
+    mode_model = 'posix-permissions/v1'
+    def __init__(self, root):
+        require(all(hasattr(os, name) for name in ('O_NOFOLLOW','O_DIRECTORY')),
+                'UNKNOWN: unsupported source manifest platform')
+        self.path = checked_root(root)
+    def directory_boundary(self):
+        root = self.path
+        require(not any(os.path.lexists(parent/'.git') for parent in (root, *root.parents)), 'UNKNOWN: Git checkout requires git-worktree manifest mode')
+    def __enter__(self):
+        self.fd = os.open(self.path, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        return self
+    def __exit__(self, *exc): os.close(self.fd)
+    def walk(self, config, metrics=None): return _walk(self.fd, config, metrics)
+    def read(self, path, expected, limit): return _read(self.fd, path, expected, limit)
+    def mode(self, info): return stat.S_IMODE(info[2])
+    def verify_root(self):
+        require(_stamp(os.stat(self.path, follow_symlinks=False)) == _stamp(os.fstat(self.fd)), 'UNKNOWN: source root changed')
+
+
+def _source(root):
+    if os.name == 'nt':
+        from support.windows_manifest_files import NativeSource
+        return NativeSource(root)
+    return _PosixSource(root)
+
+
 def capture(root, config, *, base=None, head=None, metrics=None):
     """Capture supported selected inputs. Every failure invalidates the whole result."""
     _config(config)
-    require(os.name != 'nt' and all(hasattr(os, name) for name in ('O_NOFOLLOW','O_DIRECTORY')),
-            'UNKNOWN: unsupported source manifest platform')
-    root = checked_root(root)
-    if config['mode'] == 'directory':
-        require(not any(os.path.lexists(parent/'.git') for parent in (root, *root.parents)), 'UNKNOWN: Git checkout requires git-worktree manifest mode')
-    fd = os.open(root, os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
-    try:
-        before = _walk(fd, config, metrics)
+    with _source(root) as source:
+        root = source.path
+        if config['mode'] == 'directory': source.directory_boundary()
+        before = source.walk(config, metrics)
         filesystem_bytes = 0
         for info in before.values():
             if stat.S_ISREG(info[2]):
@@ -434,14 +470,14 @@ def capture(root, config, *, base=None, head=None, metrics=None):
         files = {}; directories = []; total = sum(blobs[v[1]]['size_bytes'] for v in list(heads.values())+list(indexes.values()))
         require(total <= config['max_total_bytes'], 'UNKNOWN: manifest aggregate limit')
         for path in sorted(before, key=lambda p:p.encode('utf-8')):
-            info = before[path]; mode = stat.S_IMODE(info[2])
+            info = before[path]; mode = source.mode(info)
             if stat.S_ISDIR(info[2]): directories.append({'path':path,'kind':'directory','mode':mode}); continue
-            data = _read(fd, path, info, min(config['max_file_bytes'], config['max_total_bytes']-total)); total += len(data)
+            data = source.read(path, info, min(config['max_file_bytes'], config['max_total_bytes']-total)); total += len(data)
             if git is not None: _not_pointer(data)
             files[path] = {'mode':mode,'size_bytes':len(data),'sha256':hashlib.sha256(data).hexdigest()}
-        require(_walk(fd, config, metrics) == before, 'UNKNOWN: source changed during capture')
-        require(_stamp(os.stat(root, follow_symlinks=False)) == _stamp(os.fstat(fd)), 'UNKNOWN: source root changed')
-        manifest = {'schema':'source-manifest/v1','mode_model':'posix-permissions/v1','config':json.loads(_canonical(config))}
+        require(source.walk(config, metrics) == before, 'UNKNOWN: source changed during capture')
+        source.verify_root()
+        manifest = {'schema':'source-manifest/v1','mode_model':source.mode_model,'config':json.loads(_canonical(config))}
         if git is None:
             manifest['entries'] = sorted(directories+[dict(path=p,kind='file',**v) for p,v in files.items()], key=lambda x:x['path'].encode('utf-8'))
         else:
@@ -455,4 +491,3 @@ def capture(root, config, *, base=None, head=None, metrics=None):
                                      for path in sorted(set(heads)|set(indexes)|set(files), key=lambda p:p.encode('utf-8'))])
         validate(manifest)
         return manifest
-    finally: os.close(fd)

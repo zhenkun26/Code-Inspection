@@ -274,7 +274,7 @@ SOURCE_CASES = [('source-ignored-union',
   'SourceManifestTests.test_reader_never_traverses_swapped_parent_link'),
  ('source-race-reenumeration',
   'support/source_manifests.py',
-  "require(_walk(fd, config, metrics) == before, 'UNKNOWN: source changed during capture')",
+  "require(source.walk(config, metrics) == before, 'UNKNOWN: source changed during capture')",
   "require(True, 'UNKNOWN: source changed during capture')",
   'validation/test_source_manifests.py',
   'SourceManifestTests.test_changed_file_and_swapped_parent_fail_closed'),
@@ -292,7 +292,7 @@ SOURCE_CASES = [('source-ignored-union',
   'SourceManifestTests.test_pure_git_mode_projection_zero_ids_and_unicode'),
  ('source-mode-model',
   'support/source_manifests.py',
-  " and manifest['mode_model'] == 'posix-permissions/v1'",
+  " and manifest['mode_model'] in {'posix-permissions/v1','windows-readonly/v1'}",
   '',
   'validation/test_source_manifests.py',
   'SourceManifestTests.test_platform_refusal_and_pure_validator'),
@@ -411,7 +411,48 @@ SOURCE_CASES.append(('source-directory-git-boundary',
  'validation/test_source_manifests.py',
  'SourceManifestTests.test_directory_mode_rejects_git_marker_before_enumeration'))
 POSIX_SOURCE_CASES.add('source-directory-git-boundary')
+# Shared lifecycle and Git projections now run natively on Windows too.
+POSIX_SOURCE_CASES -= {
+ 'source-actual-content', 'source-actual-head-tree', 'source-begin-before-charge',
+ 'source-blob-size-before-read', 'source-committed-projections', 'source-current-eligibility',
+ 'source-directory-not-commit', 'source-full-plan-id', 'source-ignored-payload',
+ 'source-ignored-union', 'source-index-flags', 'source-lfs-pointer',
+ 'source-recovery-no-fresh', 'source-required-proof', 'source-subject-association',
+ 'source-subject-identity'}
+SOURCE_CASES += [
+ ('windows-mode-domain', 'support/source_manifests.py',
+  "require(type(value['mode']) is int and valid_mode,", "require(type(value['mode']) is int,",
+  'validation/test_source_manifests.py', 'SourceManifestTests.test_windows_mode_model_is_pure_and_distinct'),
+ ('windows-mode-not-executable', 'support/source_manifests.py',
+  "if manifest['mode_model'] == 'posix-permissions/v1':", "if True:",
+  'validation/test_source_manifests.py', 'SourceManifestTests.test_windows_mode_model_is_pure_and_distinct'),
+ ('bounded-pipe-output', 'support/bounded_process.py',
+  "_require(len(chunk) <= allowance, 'UNKNOWN: subprocess output limit (' + name + ')')", "None",
+  'validation/test_bounded_process.py', 'BoundedProcess.test_zero_limit_rejects_first_byte'),
+ ('bounded-pipe-deadline', 'support/bounded_process.py',
+  'until = min(until, deadline)', 'until = until',
+  'validation/test_bounded_process.py', 'BoundedProcess.test_absolute_capture_deadline_shortens_command_timeout')]
 CASES += SOURCE_CASES
+
+WINDOWS_MANIFEST_CASES = [
+ ('native-source-streams', 'support/windows_manifest_files.py', '    _streams(handle)\n', '',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_alternate_streams_on_file_directory_and_root_are_refused'),
+ ('native-source-hardlinks', 'support/windows_manifest_files.py', 'directory or info[3] == 1', 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_hardlink_refused_before_source_payload'),
+ ('native-source-enumeration-cap', 'support/windows_manifest_files.py', 'visited <= MAX_VISITED', 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_limits_and_native_enumeration_fail_before_payload'),
+ ('native-source-marker', 'support/windows_manifest_files.py', 'not _marker(handle)', 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_ancestor_git_marker_refuses_before_walk'),
+ ('native-source-preread', 'support/windows_manifest_files.py', 'before == expected and before[3] == 1', 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_changed_leaf_before_read_refuses_before_readfile'),
+ ('native-source-reobserve', 'support/source_manifests.py', 'source.walk(config, metrics) == before', 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_attribute_change_after_payload_invalidates_reobservation'),
+ ('native-source-write-sharing', 'support/windows_files.py',
+  '3 if lock or (directory and pin) else 7 if directory else 1,',
+  '3 if lock or (directory and pin) else 7 if directory else 3,',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_changed_leaf_before_read_refuses_before_readfile'),
+ ('native-source-filemode', 'support/source_manifests.py', "cp['core'].get('filemode', '').lower() == 'false'", 'True',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_git_requires_explicit_disabled_native_filemode')]
 
 
 def main():
@@ -426,7 +467,7 @@ def main():
                 sources.append(path)
     cases = CASES
     if os.name == 'nt':
-        cases = [x for x in CASES if x[0] != 'leaf-no-follow' and x[0] not in POSIX_SOURCE_CASES] + [
+        cases = [x for x in CASES if x[0] != 'leaf-no-follow' and x[0] not in POSIX_SOURCE_CASES] + WINDOWS_MANIFEST_CASES + [
             ('windows-no-reparse', 'support/windows_files.py', 'OBJ_DONT_REPARSE = 0x1000', 'OBJ_DONT_REPARSE = 0',
              'validation/test_native_files.py', 'WindowsFiles.test_junction_and_symlink_all_positions'),
             ('windows-lock', 'support/windows_files.py',

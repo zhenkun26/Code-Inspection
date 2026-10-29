@@ -41,6 +41,12 @@ jobs:
         run: |
           python --version
           git --version
+      - name: Verify native source boundary before full checks
+        if: runner.os == 'Windows'
+        run: python -B validation/test_windows_manifests.py
+      - name: Verify optimized native source boundary before full checks
+        if: runner.os == 'Windows'
+        run: python -O -B validation/test_windows_manifests.py
       - name: Run maintained checks (ordinary and optimized Python)
         run: python -B validation/run_checks.py --keep-artifacts
       - name: Check fixed guard-removal regressions
