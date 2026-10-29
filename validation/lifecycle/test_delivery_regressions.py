@@ -35,7 +35,11 @@ class MemorySession:
                 expires_at=(clock+timedelta(hours=1)).isoformat(),provider='synthetic',
                 run='1',attempt='1',job=c['id'],reviewer='test',context_id='test'))
 
-    def charge(self):self.state['budget']['operations']+=1
+    # This storage-free double tests delivery rules; real Session durability is
+    # exercised by the separate filesystem fault regressions.
+    def require_usable(self):pass
+    def charge(self, rounds=0, operation='unspecified'):
+        self.state['budget']['operations']+=1;self.state['budget']['rounds']+=rounds
     def persist(self):pass
     def event(self,action,detail):self.state['events'].append({'action':action,'detail':copy.deepcopy(detail)})
     def authorized(self,action,binding):return (action,binding) in self.grants

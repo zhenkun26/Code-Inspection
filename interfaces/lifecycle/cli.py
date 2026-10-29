@@ -35,7 +35,7 @@ def main():
                     payload=load(args.input_root,args.record)
                     out=review.ingest(s,args.input_root,payload) if c=='ingest' else review.import_security(s,args.input_root,payload) if c=='import-security' else delivery.observe(s,payload)
                 elif c=='begin-review':
-                    s.charge(rounds=1);s.state['round_subject']=digest(s.state['subject']);s.event('begin-review',{'subject':s.state['subject']});s.persist();out=review.evaluate(s)
+                    s.charge(rounds=1,operation='begin-review');s.state['round_subject']=digest(s.state['subject']);s.event('begin-review',{'subject':s.state['subject']});s.persist();out=review.evaluate(s)
                 elif c in {'adjudicate','advance','merge-prepare','delivery-plan'}:
                     require(args.record,'host-controlled record required');record=load(s.root,args.record)
                     out={'adjudicate':review.adjudicate,'advance':review.advance,'merge-prepare':merge.prepare,'delivery-plan':delivery.plan}[c](s,record)

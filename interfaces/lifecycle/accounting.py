@@ -1,4 +1,5 @@
 """Invocation observations and existing ledger capacity; no charging or writes."""
+import copy
 import time
 
 
@@ -67,7 +68,11 @@ def budget_report(session, metrics):
                 'next_review_round': used['operations'] + 1 <= limit['max_operations']
                                      and used['rounds'] + 1 <= limit['max_rounds'],
             }
+    attempt = None
+    if session is not None and session.current_attempt is not None:
+        attempt = dict(copy.deepcopy(session.current_attempt), durability=ledger['durability'])
     return {'schema': 'lifecycle-budget-report/v1', 'ledger': ledger,
+            'current_attempt': attempt,
             'observed_work': metrics.finish(),
             'external': {'cost': {'status': 'unknown', 'value': None},
                          'runtime_seconds': {'status': 'unknown', 'value': None}},

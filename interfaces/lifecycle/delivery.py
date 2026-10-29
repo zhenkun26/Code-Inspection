@@ -217,6 +217,7 @@ def validated_operation(s,operation,state,seen=None):
 class LocalSimulation:
     """Host contract: validated read/apply/query; no external side effects."""
     def __init__(self,s):
+        s.require_usable()
         self.s=s
         ledger=s.state['delivery'];keys(ledger,[],['plans','requests','observations'])
         for name in ['plans','requests']:
@@ -235,6 +236,7 @@ class LocalSimulation:
         for artifact,version in p['rollback_compatibility'].items():text(artifact);text(version)
         self.config=p
     def read(self):
+        self.s.require_usable()
         value=load(self.s.root,'sim-provider.json')
         keys(value,PROVIDER_FIELDS|{'operations'})
         provider_value(projection(value))
@@ -242,12 +244,14 @@ class LocalSimulation:
         for operation in value['operations']:hash_value(operation)
         return value
     def query(self,operation):
+        self.s.require_usable()
         state=self.read();proposal,request,receipt=validated_operation(self.s,operation,state)
         absent='not_applied' if digest(provider_snapshot(state))==proposal['expected_provider'] else 'unknown'
         if request and request['result']=='unknown':absent='unknown'
         return {'simulation':True,'operation':operation,'result':receipt if receipt is not None else
                 {'result':absent},'state':state}
     def apply(self,plan):
+        self.s.require_usable()
         state=self.read();proposal,request,receipt=validated_operation(self.s,plan['id'],state)
         require(digest(plan)==digest(proposal),'delivery apply proposal mismatch')
         if receipt is not None:return self.query(proposal['id'])
@@ -266,6 +270,7 @@ class LocalSimulation:
 
 
 def observe(s,record):
+    s.require_usable()
     p=LocalSimulation(s);state=p.read();o=p.config['observation']
     keys(record,['schema','artifact','target','cohort','config','window_start','window_end','source','query','samples','value','complete','observed_at'])
     require(record['schema']=='observation/v1','observation schema');text(record['source']);text(record['query'])
@@ -274,7 +279,7 @@ def observe(s,record):
     require(type(record['complete']) is bool,'complete flag')
     for n in ['window_start','window_end','observed_at']:timestamp(record[n])
     require(p.config['enabled'] and p.config['capabilities']['observation']['enabled'],'observation not enabled')
-    s.charge();s.state['delivery'].setdefault('observations',[]).append(copy.deepcopy(record));s.event('observe',{'record_digest':digest(record)});s.persist()
+    s.charge(operation='observe');s.state['delivery'].setdefault('observations',[]).append(copy.deepcopy(record));s.event('observe',{'record_digest':digest(record)});s.persist()
     return observation_status(s,p,state)
 
 
@@ -365,6 +370,7 @@ def fresh_conditions(s,p,proposal,state):
 
 
 def plan(s,record):
+    s.require_usable()
     keys(record,['schema','action','parameters']);require(record['schema']=='delivery-plan/v1','delivery plan schema')
     action=record['action'];v=record['parameters'];parameters(action,v)
     p=LocalSimulation(s);state=p.read()
@@ -383,17 +389,19 @@ def plan(s,record):
             'expected_provider':digest(snapshot),'provider_snapshot':snapshot,'policy_sha':s.pin,
             'subject':copy.deepcopy(s.state['subject']),'source':source,'simulation':True}
     result['id']=digest(result)
-    s.charge();s.state['delivery'].setdefault('plans',{})[result['id']]=result
+    s.charge(operation='delivery-plan');s.state['delivery'].setdefault('plans',{})[result['id']]=result
     s.event('delivery-plan',result);s.persist();return copy.deepcopy(result)
 
 
 def execute(s,operation):
+    s.require_usable()
     p=LocalSimulation(s);state=p.read();proposal,request,receipt=validated_operation(s,operation,state)
     # An existing exact attempt is queried, never replayed or charged again.
     if request is not None or receipt is not None:return p.query(operation)
     fresh_conditions(s,p,proposal,state)
-    s.charge();request=request_intent(proposal,now().isoformat())
-    s.state['delivery'].setdefault('requests',{})[operation]=request;s.persist()
+    s.charge(operation='delivery-execute');request=request_intent(proposal,now().isoformat())
+    s.state['delivery'].setdefault('requests',{})[operation]=request
+    s.event('delivery-requested',{'operation':operation});s.persist()
     try:out=p.apply(proposal)
     except (ValueError,OSError):
         request['result']='unknown';s.persist();raise

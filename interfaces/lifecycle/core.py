@@ -8,10 +8,14 @@ import os
 from pathlib import Path
 import tempfile
 import sys
+import uuid
 from support.local_files import checked_root, decode_json, read_bytes, require, root_lock, is_link
 
 STATES = {'PASS', 'FAIL', 'NOT_RUN', 'BLOCKED', 'UNKNOWN', 'N_A'}
 SUBJECT = {'base', 'head', 'worktree_digest', 'ci_config_digest', 'artifact_digest'}
+OPERATIONS = {'begin-review', 'ingest', 'import-security', 'adjudicate', 'advance',
+              'merge-prepare', 'merge-execute', 'delivery-plan', 'delivery-execute',
+              'observe', 'unspecified'}
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
@@ -61,6 +65,8 @@ class Session:
         self.metrics = metrics
         self.accounting_trusted = False
         self.accounting_durability = 'unknown'
+        self.current_attempt = None
+        self._persistence_failed = False
         self.root = checked_root(host_root)
         raw = read_bytes(self.root, 'policy.json')
         require(hashlib.sha256(raw).hexdigest() == policy_sha, 'host policy pin mismatch')
@@ -98,6 +104,7 @@ class Session:
         original = self.root
         self.accounting_trusted = False
         self.accounting_durability = 'unknown'
+        self.current_attempt = None
         with root_lock(original) as selected:
             self.root = selected
             try:
@@ -107,29 +114,52 @@ class Session:
                 self.state=state
                 if state is not None:
                     require(state['policy_sha']==self.pin and state['task_id']==self.policy['task_id'],'state/policy mismatch; explicit migration required')
+                self._persistence_failed = False
                 self.accounting_trusted = True
                 self.accounting_durability = 'persisted' if state is not None else 'unknown'
                 yield self
             finally:
                 self.root = original
 
+    def require_usable(self):
+        require(not self._persistence_failed,
+                'HOLD: session persistence failed; successful locked reload required before reuse')
+
     def event(self, action, detail):
-        self.state['events'].append({'at':now().isoformat(),'action':action,'detail':detail})
+        self.require_usable()
+        event={'at':now().isoformat(),'action':action,'detail':detail}
+        if self.current_attempt is not None:event['attempt_id']=self.current_attempt['attempt_id']
+        self.state['events'].append(event)
     def persist(self):
+        self.require_usable()
         self.accounting_durability = 'unknown'
-        save(self.root,'state.json',self.state)
+        try:save(self.root,'state.json',self.state)
+        except BaseException:
+            self._persistence_failed = True
+            raise
         self.accounting_durability = 'persisted'
-    def charge(self, rounds=0):
+    def charge(self, rounds=0, operation='unspecified'):
+        self.require_usable()
+        require(type(rounds) is int and rounds in {0,1},'round delta must be integer 0 or 1')
+        require(type(operation) is str and operation in OPERATIONS,'known lifecycle operation required')
         require(self.state is not None,'initialize handoff first')
         used=self.state.get('budget')
         require(isinstance(used,dict) and all(type(used.get(name)) is int and used[name]>=0
                 for name in ['operations','rounds']),'REPLAN: invalid budget usage; explicit migration required')
+        require(type(self.state.get('events')) is list,
+                'REPLAN: invalid attempt history; explicit migration required')
         limit=self.policy['budget']
         require(used['operations']+1<=limit['max_operations'] and used['rounds']+rounds<=limit['max_rounds'],'REPLAN: budget exhausted')
+        attempt={'schema':'lifecycle-attempt/v1','attempt_id':uuid.uuid4().hex,
+                 'sequence':used['operations']+1,'operation':operation,'round_delta':rounds}
+        started={'at':now().isoformat(),'action':'attempt-started','detail':copy.deepcopy(attempt)}
         used['operations']+=1;used['rounds']+=rounds
+        self.current_attempt=attempt
+        self.state['events'].append(started)
         self.persist() # started attempts count even if later processing fails
 
     def initialize(self, handoff):
+        self.require_usable()
         require(self.state is None,'session already initialized; no budget reset')
         keys(handoff,['schema','task_id','subject','budget','requirements_ref','history_ref','findings'])
         require(handoff['schema']=='pre-pr-handoff/v1' and handoff['task_id']==self.policy['task_id'],'handoff identity')
@@ -149,6 +179,7 @@ class Session:
 
     def authority(self):
         # Host-owned side channel, never read decisions from tool payloads.
+        self.require_usable()
         data=load(self.root,'authority.json');keys(data,['schema','decisions'])
         require(data['schema']=='host-authority/v1' and isinstance(data['decisions'],list),'authority schema')
         return data['decisions']

@@ -88,6 +88,16 @@ authority.json (`host-authority/v1`) 包含 decisions，每项 id/actor/kind/act
 
 原安全 B 接入：`security-import/v1` 包含 check、record（输入根下既有 security-evidence/v1 JSON）。命令 import-security 从同一次读取的字节解析并计算摘要，关联其 request_binding/subject/config/scope/raw，不把 authorizes_progress 当批准；候选继续核验，缺绑定拒绝。没有原生 SARIF/CI 解析器。
 
+### 尝试明细与保存故障
+
+账本仍为 `lifecycle-state/v1`。新收费点在既有 `events` 中增加 `attempt-started`，detail 使用 `lifecycle-attempt/v1`：唯一 `attempt_id`、收费后的 operations 序号 `sequence`、固定 `operation` 标签及 `round_delta`，事件 `at` 记录时间。这条记录与 operations/rounds 增量在同一次原子文件替换中保存，不新增收费点。固定标签不包含原始命令参数、路径或证据正文。后续业务事件关联同一 `attempt_id`；pending 保存时另有 `merge-requested` / `delivery-requested` 事件关联精确计划 ID，回执和请求原有 schema/批准绑定不变。started 只证明开始记账，不证明处理完成或外部动作成功。
+
+`budget_report.current_attempt` 仅说明本次调用的新尝试及其 durability；只读查询、旧账本或未开始新收费时为 null，不能解释成历史消耗为零。旧累计数保持不变，不补造旧明细，不根据新明细反推或重置计数。直接 API 的 `Session.charge(rounds)` 仅接受精确整数 0 或 1；负数、bool、float、其他增量及不受控标签在修改内存/磁盘前拒绝。CLI 原来就使用固定增量，这是底层 API 防御，不是已证实的远程预算绕过。
+
+Session 的任意账本保存异常都会保留 unknown durability 并锁止该会话的后续保存、收费及合并/交付执行和结果查询。不能在捕获异常后把内存 pending 当成已落盘意图；也不能盲目回滚内存并假定磁盘没变，因为文件替换可能已完成才报错。须退出当前锁区间，再成功进入 `locked()` 核验政策并重新读取磁盘。正常会话的预算耗尽不影响原有安全查询路径；这个保存故障锁止条件不等于预算限制。
+
+恢复依据实际持久化边界：只有 started 而无 pending，表示尚未接受执行意图，重新开展操作仍按原收费点形成另一笔尝试；已有合法 pending/回执时仅查询协调，不再次执行或收费。动作完成而响应/最终账本保存丢失时，仍按原有真实 ref/provider 状态和严格绑定恢复，不把新明细当授权。若某个已知动作结果自身未能写入，重启后不能凭明细重建这个丢失的事实；匹配状态不证明具体写入者。既有已持久化失败回执继续按原策略拒绝确认，旧缺绑定回执也不会自动升级。1 MiB 限额仍有效，增长到限时显式停止，由宿主保留历史后处理，不删除事件腾额度。外部费用/token/总耗时不在本次明细范围，仍未知。
+
 ## 可执行入口
 
 在项目根目录：

@@ -61,6 +61,7 @@ class LocalGit:
 
 
 def prepare(s,request):
+    s.require_usable()
     keys(request,['schema','base','head','integration_artifact'])
     require(request['schema']=='merge-plan/v1','merge plan schema');text(request['integration_artifact'])
     require(evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: PR gate incomplete')
@@ -69,7 +70,7 @@ def prepare(s,request):
     require(g.target()==base,'HOLD: target drift before preparation')
     binding=digest({'repository':str(g.root),'base':base,'head':head,'policy_sha':s.pin})
     require(s.authorized('merge-prepare',binding),'BLOCKED: prepare permission missing')
-    s.charge();x=g.run('merge-tree','--write-tree',base,head)
+    s.charge(operation='merge-prepare');x=g.run('merge-tree','--write-tree',base,head)
     if x.returncode!=0:
         s.event('merge-preparation-failed',{'base':base,'head':head,'returncode':x.returncode,'stdout':x.stdout[:8192],'stderr':x.stderr[:8192],'truncated':len(x.stdout)>8192 or len(x.stderr)>8192})
         s.persist();return {'status':'FAIL' if x.returncode==1 else 'UNKNOWN','recommendation':'HOLD','exit_code':x.returncode,'reason':'combination conflict' if x.returncode==1 else 'Git preparation error; not a proven product defect'}
@@ -85,6 +86,7 @@ def prepare(s,request):
 
 def validate_plan(s,plan=None):
     """Validate historical intent and physical Git facts without current PR gates."""
+    s.require_usable()
     if plan is None:plan=s.state['merge']
     require(plan,'merge plan required')
     keys(plan,['repository','target_ref','method','base','head','candidate','tree',
@@ -145,6 +147,7 @@ def validate_receipt(s,plan):
 
 
 def _preflight(s,plan,g):
+    s.require_usable()
     result=evaluate(s,'merge',plan['subject'],source_identity=plan['source_subject'])
     # Revalidate prior PR decisions and findings immediately before execution.
     prior=evaluate(s)
@@ -161,6 +164,7 @@ def _preflight(s,plan,g):
 
 
 def preflight(s):
+    s.require_usable()
     plan,g=validate_plan(s);validate_receipt(s,plan)
     return _preflight(s,plan,g)
 
@@ -172,20 +176,23 @@ def _query(plan,g,receipt):
 
 
 def query(s):
+    s.require_usable()
     plan,g=validate_plan(s);receipt=validate_receipt(s,plan)
     return _query(plan,g,receipt)
 
 
 def execute(s):
+    s.require_usable()
     plan,g=validate_plan(s);receipt=validate_receipt(s,plan)
     if receipt is not None:return _query(plan,g,receipt)
     require(_preflight(s,plan,g)['recommendation']=='READY_FOR_NEXT','HOLD: merge preflight not ready')
-    s.charge()
+    s.charge(operation='merge-execute')
     # The expected-old OID is checked atomically by Git, unlike check-then-merge.
     receipt={'schema':'merge-receipt/v2','operation':plan['id'],
              **{name:plan[name] for name in ['repository','target_ref','policy_sha','base','candidate']},
              'result':'pending','requested_at':now().isoformat()}
-    s.state['receipts'][plan['id']]=receipt;s.persist()
+    s.state['receipts'][plan['id']]=receipt
+    s.event('merge-requested',{'operation':plan['id']});s.persist()
     try:x=g.run('update-ref','--no-deref',plan['target_ref'],plan['candidate'],plan['base'])
     except (subprocess.TimeoutExpired,OSError) as exc:
         receipt.update(result='unknown',diagnostics=type(exc).__name__+': '+str(exc)[:2048]);s.persist()
