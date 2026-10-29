@@ -2,7 +2,7 @@
 
 The optional lifecycle interface can bind **one regular file, up to 1 MiB**, to a merge candidate or simulated delivery operation. It computes SHA-256 and length from the bytes it actually reads. The artifact identity is `sha256:<raw-byte SHA-256>`; this is distinct from the canonical JSON hash used for a plan ID.
 
-This is content consistency, not authenticated build provenance, a test result, or a production deployment adapter. The host still decides which source, build configuration and artifact belong together. A source-only review does not require a fictional build artifact. Directory manifests, complete dirty/untracked build inputs, remote objects and production providers are unsupported by this capability; do not substitute HEAD for those inputs or claim they were verified.
+This is content consistency, not authenticated build provenance, a test result, or a production deployment adapter. The host still decides which source, build configuration and artifact belong together. A source-only review does not require a fictional build artifact. Directory artifact consumption, remote objects and production providers are unsupported by this capability. The separate [source manifest](source-manifests.md) records declared directory/worktree inputs; it does not establish that a build consumed them or replace the single-file artifact contract. Do not substitute HEAD for uncollected inputs.
 
 ## Trusted policy and files
 

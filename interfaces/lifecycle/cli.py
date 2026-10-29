@@ -5,8 +5,8 @@ from pathlib import Path
 import sys
 import subprocess
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from interfaces.lifecycle.core import Session,load,digest,require
-from interfaces.lifecycle import review,merge,delivery
+from interfaces.lifecycle.core import Session,load,digest,require,keys
+from interfaces.lifecycle import review,merge,delivery,source_content
 from interfaces.lifecycle.accounting import InvocationMetrics,budget_report
 
 
@@ -19,7 +19,7 @@ def main():
     p.add_argument('--operation',help='exact planned delivery operation ID')
     p.add_argument('command',choices=['init','begin-review','ingest','import-security','adjudicate','advance','pr-status','export',
         'merge-prepare','merge-preflight','merge-execute','merge-query','delivery-plan','delivery-execute',
-        'delivery-query','observe','delivery-status','temp-report'])
+        'delivery-query','observe','delivery-status','temp-report','source-capture'])
     args=p.parse_args()
     metrics=InvocationMetrics();s=None
     try:
@@ -29,7 +29,12 @@ def main():
             print(json.dumps(out,ensure_ascii=True,indent=2,allow_nan=False));return 0
         s=Session(args.host_root,args.policy_sha,metrics=metrics)
         with s.locked():
-            if args.command=='init':
+            if args.command=='source-capture':
+                require(args.record,'host-controlled source capture record required')
+                record=load(s.root,args.record);keys(record,['schema','subject'])
+                require(record['schema']=='source-capture/v1','source capture schema')
+                out=source_content.build(s,record['subject'])
+            elif args.command=='init':
                 require(args.record,'host handoff record required');out=s.initialize(load(s.root,args.record))
             else:
                 require(s.state is not None,'initialize first')
@@ -39,6 +44,7 @@ def main():
                     payload=load(args.input_root,args.record)
                     out=review.ingest(s,args.input_root,payload) if c=='ingest' else review.import_security(s,args.input_root,payload) if c=='import-security' else delivery.observe(s,payload)
                 elif c=='begin-review':
+                    source_content.current(s)
                     s.charge(rounds=1,operation='begin-review');s.state['round_subject']=digest(s.state['subject']);s.event('begin-review',{'subject':s.state['subject']});s.persist();out=review.evaluate(s)
                 elif c in {'adjudicate','advance','merge-prepare','delivery-plan'}:
                     require(args.record,'host-controlled record required');record=load(s.root,args.record)

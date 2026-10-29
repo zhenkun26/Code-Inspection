@@ -74,7 +74,7 @@ class Session:
         self.policy = decode_json(raw)
         p = self.policy
         keys(p, ['schema','task_id','risk','checks','budget','humans','reviewers','high_expert_count',
-                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content'])
+                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content','source_content'])
         require(p['schema']=='lifecycle-policy/v1', 'policy schema')
         text(p['task_id']); require(p['risk'] in {'low','medium','high'}, 'risk')
         require(type(p['low_auto']) is bool, 'low_auto boolean')
@@ -161,17 +161,23 @@ class Session:
     def initialize(self, handoff):
         self.require_usable()
         require(self.state is None,'session already initialized; no budget reset')
-        keys(handoff,['schema','task_id','subject','budget','requirements_ref','history_ref','findings'])
+        keys(handoff,['schema','task_id','subject','budget','requirements_ref','history_ref','findings'],['source_content'])
         require(handoff['schema']=='pre-pr-handoff/v1' and handoff['task_id']==self.policy['task_id'],'handoff identity')
         subject(handoff['subject']);text(handoff['requirements_ref']);text(handoff['history_ref'])
         keys(handoff['budget'],['rounds','operations'])
         for v in handoff['budget'].values():require(type(v) is int and v>=0,'invalid inherited budget')
         require(handoff['budget']['rounds']<=self.policy['budget']['max_rounds'] and handoff['budget']['operations']<=self.policy['budget']['max_operations'],'inherited budget exceeds plan')
         require(isinstance(handoff['findings'],list),'findings list')
+        from interfaces.lifecycle import source_content
+        if 'source_content' in handoff:
+            source = source_content.capture(self,handoff['source_content'],handoff['subject'])
+        else:
+            source = source_content.fresh(self,None,handoff['subject'])
         self.state={'schema':'lifecycle-state/v1','task_id':handoff['task_id'],'policy_sha':self.pin,
                     'subject':handoff['subject'],'budget':copy.deepcopy(handoff['budget']),
                     'handoff':handoff,'evidence':[],'findings':{},'events':[],'round_subject':None,
                     'merge':{},'receipts':{},'delivery':{}}
+        if source is not None:self.state['source_content']=source
         from interfaces.lifecycle.review import candidate
         for item in handoff['findings']:candidate(self,item)
         self.event('initialize',{'handoff_digest':digest(handoff),'inherited_budget':handoff['budget']});self.persist()

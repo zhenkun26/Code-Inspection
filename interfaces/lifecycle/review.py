@@ -1,5 +1,6 @@
 """PR evidence ingestion and host-adjudicated finding history. No model or publisher."""
 import copy
+import subprocess
 from support.local_files import decode_json, read_bytes, digest as bytes_digest
 from interfaces.lifecycle.core import keys, text, subject, digest, timestamp, now, STATES, require
 
@@ -144,6 +145,15 @@ def checks(s,stage,identity,source_identity=None):
 
 def evaluate(s,stage='pr',identity=None,source_identity=None):
     identity=identity or s.state['subject'];results=checks(s,stage,identity,source_identity);reasons=[]
+    from interfaces.lifecycle import source_content
+    try:
+        source=source_content.current(s)
+        if source is not None:
+            results.append({'id':'source-content','status':'PASS',
+                            'scope':'host-declared scoped source snapshot'})
+    except (ValueError,OSError,UnicodeError,TypeError,KeyError,subprocess.TimeoutExpired) as exc:
+        results.append({'id':'source-content','status':'UNKNOWN','reason':str(exc)})
+        reasons.append('source content unavailable or inconsistent')
     if stage=='pr' and s.state['round_subject']!=digest(s.state['subject']):reasons.append('current subject review round not registered')
     for f in s.state['findings'].values():
         if f['blocking'] and not f['alias']:reasons.append('unresolved finding '+f['id'])
@@ -194,13 +204,20 @@ def adjudicate(s,record):
 
 def advance(s,record):
     s.require_usable()
-    keys(record,['schema','subject','impact','reused_evidence'])
+    keys(record,['schema','subject','impact','reused_evidence'],['source_content'])
     require(record['schema']=='subject-change/v1','subject change schema');subject(record['subject']);text(record['impact'])
     require(isinstance(record['reused_evidence'],list),'reuse list')
     # Safe reference implementation conservatively invalidates all bindings on change.
     # Host may import a newly attested record after reviewing equivalence, never auto-relabel old PASS.
     require(not record['reused_evidence'],'direct identity relabel unsupported; import newly attested evidence preserving source')
+    from interfaces.lifecycle import source_content
+    if 'source_content' in record:
+        source=source_content.capture(s,record['source_content'],record['subject'])
+    else:
+        source=source_content.fresh(s,None,record['subject'])
     s.charge(operation='advance');old=s.state['subject'];s.state['subject']=record['subject'];s.state['round_subject']=None
+    if source is None:s.state.pop('source_content',None)
+    else:s.state['source_content']=source
     for f in s.state['findings'].values():
         if not f['blocking']:f.update(blocking=True,disposition='fixed_pending',fact='insufficient')
     s.event('advance',{'old':old,'new':record['subject'],'impact':record['impact']});s.persist();return evaluate(s)
