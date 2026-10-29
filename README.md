@@ -76,6 +76,8 @@ Stored merge/delivery plans and receipts are checked for exact intent and object
 
 Check results retain optional failures separately from blocking decisions. N_A requires a current, scoped host applicability record; a legacy reason alone becomes UNKNOWN. CLI budget reports separate existing ledger capacity, observed work in this invocation and unknown external costs. Capacity is not authorization, and safe receipt queries remain available after exhaustion. See the [record and accounting contract](interfaces/lifecycle/README.md).
 
+New charged attempts save a versioned started record with the counter increment; started does not mean the action succeeded. A failed ledger save leaves durability unknown and fences that Session until a validated reload. Old usage is preserved without invented history, and accepted-operation recovery remains uncharged.
+
 ## Verification and project layout
 
 Validation uses the maintained local/CI entry, including ordinary and optimized Python, isolated Git demos, file safety and distribution checks. Results bind to the tested revision; see [verification scope](docs/acceptance.md) and the actual Actions run. Independent AI reviews are development activities, **not an installed automatic AI-review service**. Simulated approvals/delivery do not prove live platform acceptance.

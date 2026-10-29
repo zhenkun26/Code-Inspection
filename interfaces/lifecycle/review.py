@@ -4,6 +4,7 @@ from support.local_files import decode_json, read_bytes, digest as bytes_digest
 from interfaces.lifecycle.core import keys, text, subject, digest, timestamp, now, STATES, require
 
 def candidate(s, item):
+    s.require_usable()
     keys(item,['id','subject','location','trigger','impact','severity','confidence_basis','attribution','attribution_basis','source','evidence_refs'])
     subject(item['subject'])
     for key in ['id','location','trigger','impact','severity','confidence_basis','attribution_basis','source']:text(item[key])
@@ -16,12 +17,13 @@ def candidate(s, item):
     # New observation can reopen; absence never closes anything.
 
 
-def ingest(s, root, batch):
+def ingest(s, root, batch, operation='ingest'):
+    s.require_usable()
     keys(batch,['schema','evidence','findings'])
     require(batch['schema']=='review-batch/v1' and isinstance(batch['evidence'],list) and isinstance(batch['findings'],list),'batch schema')
     needs_round=bool(batch['findings']) or any(c['id']==e.get('check') and c['gate'] in {'semantic','security'} for e in batch['evidence'] if isinstance(e,dict) for c in s.policy['checks'])
     require(not needs_round or s.state['round_subject']==digest(s.state['subject']), 'REPLAN: register a review round for the current subject before review ingestion')
-    s.charge()
+    s.charge(operation=operation)
     staged=copy.deepcopy(s.state)
     try:
         for e in batch['evidence']:
@@ -47,7 +49,7 @@ def ingest(s, root, batch):
         s.event('ingest',{'batch_digest':digest(batch),'evidence_count':len(batch['evidence']),'findings_count':len(batch['findings'])})
         s.persist()
     except Exception:
-        s.state=staged
+        if not s._persistence_failed:s.state=staged
         raise
     return evaluate(s,'pr')
 
@@ -162,6 +164,7 @@ def evaluate(s,stage='pr',identity=None,source_identity=None):
 
 
 def adjudicate(s,record):
+    s.require_usable()
     keys(record,['schema','actor','subject','finding','fact','disposition','blocking','reason','evidence_refs','duplicate_of'])
     require(record['schema']=='finding-decision/v1' and record['actor'] in s.policy['reviewers'],'trusted coordinator required')
     require(record['subject']==s.state['subject'],'stale adjudication')
@@ -185,18 +188,19 @@ def adjudicate(s,record):
         require(target in s.state['findings'] and target!=f['id'] and not s.state['findings'][target]['alias'],'invalid duplicate target')
         # Keep both observations/decisions; canonical issue remains at least as blocking.
         s.state['findings'][target]['blocking'] |= record['blocking']
-    s.charge();f['decisions'].append(copy.deepcopy(record));f.update(fact=record['fact'],disposition=record['disposition'],blocking=record['blocking'],alias=target or None)
+    s.charge(operation='adjudicate');f['decisions'].append(copy.deepcopy(record));f.update(fact=record['fact'],disposition=record['disposition'],blocking=record['blocking'],alias=target or None)
     s.event('adjudicate',{'finding':f['id'],'record_digest':digest(record)});s.persist();return evaluate(s)
 
 
 def advance(s,record):
+    s.require_usable()
     keys(record,['schema','subject','impact','reused_evidence'])
     require(record['schema']=='subject-change/v1','subject change schema');subject(record['subject']);text(record['impact'])
     require(isinstance(record['reused_evidence'],list),'reuse list')
     # Safe reference implementation conservatively invalidates all bindings on change.
     # Host may import a newly attested record after reviewing equivalence, never auto-relabel old PASS.
     require(not record['reused_evidence'],'direct identity relabel unsupported; import newly attested evidence preserving source')
-    s.charge();old=s.state['subject'];s.state['subject']=record['subject'];s.state['round_subject']=None
+    s.charge(operation='advance');old=s.state['subject'];s.state['subject']=record['subject'];s.state['round_subject']=None
     for f in s.state['findings'].values():
         if not f['blocking']:f.update(blocking=True,disposition='fixed_pending',fact='insufficient')
     s.event('advance',{'old':old,'new':record['subject'],'impact':record['impact']});s.persist();return evaluate(s)
@@ -204,6 +208,7 @@ def advance(s,record):
 
 def import_security(s,root,wrapper):
     """Consume existing B record as evidence, never as authorization or human approval."""
+    s.require_usable()
     keys(wrapper,['schema','check','record'])
     require(wrapper['schema']=='security-import/v1','security import schema')
     raw=read_bytes(root,wrapper['record']);b=decode_json(raw)
@@ -223,4 +228,4 @@ def import_security(s,root,wrapper):
         findings.append({'id':'B-'+request['request_id']+'-'+f['id'],'subject':b['subject'],'location':f['location'],'trigger':f['trigger'],
             'impact':f['impact'],'severity':f['tool_severity'],'confidence_basis':'unverified tool candidate','attribution':'uncertain',
             'attribution_basis':'not established by tool output','source':e['id'],'evidence_refs':[e['id']]})
-    return ingest(s,root,{'schema':'review-batch/v1','evidence':[e],'findings':findings})
+    return ingest(s,root,{'schema':'review-batch/v1','evidence':[e],'findings':findings},operation='import-security')
