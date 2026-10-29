@@ -53,6 +53,8 @@ It retains a new external directory with commands and evidence. The tiny content
 - [Support and acceptance evidence](docs/acceptance.md)
 - [Sources and license scope](docs/sources.md)
 
+An explicit [temporary-state inspection](docs/temporary-state.md) reports crash residues under the host lock, without reading their contents or deleting them. It is a recovery aid, not automatic cleanup or evidence that a pending action succeeded.
+
 ## Requirements and checks
 
 Default A is Markdown plus your agent host: no new mandatory third-party runtime. Host/model access may have costs or send data to authorized providers; low dependency does not mean guaranteed offline operation. Optional B uses Python 3.9+ standard library and POSIX no-follow file operations/locks, or the native Windows backend described in [platform support](docs/windows-support.md); isolated Git operations need Git supporting `merge-tree --write-tree`. Only trusted self-owned fixtures may run through these helpers.
