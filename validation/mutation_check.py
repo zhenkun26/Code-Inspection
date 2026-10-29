@@ -446,7 +446,11 @@ WINDOWS_MANIFEST_CASES = [
  ('native-source-preread', 'support/windows_manifest_files.py', 'before == expected and before[3] == 1', 'True',
   'validation/test_windows_manifests.py', 'WindowsManifests.test_changed_leaf_before_read_refuses_before_readfile'),
  ('native-source-reobserve', 'support/source_manifests.py', 'source.walk(config, metrics) == before', 'True',
-  'validation/test_windows_manifests.py', 'WindowsManifests.test_observed_same_length_write_after_payload_is_refused'),
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_attribute_change_after_payload_invalidates_reobservation'),
+ ('native-source-write-sharing', 'support/windows_files.py',
+  '3 if lock or (directory and pin) else 7 if directory else 1,',
+  '3 if lock or (directory and pin) else 7 if directory else 3,',
+  'validation/test_windows_manifests.py', 'WindowsManifests.test_changed_leaf_before_read_refuses_before_readfile'),
  ('native-source-filemode', 'support/source_manifests.py', "cp['core'].get('filemode', '').lower() == 'false'", 'True',
   'validation/test_windows_manifests.py', 'WindowsManifests.test_git_requires_explicit_disabled_native_filemode')]
 

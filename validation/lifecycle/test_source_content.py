@@ -135,7 +135,7 @@ class SourceContent(unittest.TestCase):
                 self.assertEqual(merge.execute(s)['result'], 'confirmed')
         except UnicodeDecodeError as exc:
             self.fail('valid source commit message bytes must not be decoded for a tree check: ' + str(exc))
-        shutil.rmtree(self.source)
+        self.source.rename(self.source.with_name('source-removed'))
         state = self.read()
         state['subject'] = dict(state['subject'], head='later-subject')
         state['budget']['operations'] = self.policy['budget']['max_operations']
@@ -444,7 +444,7 @@ class SourceContent(unittest.TestCase):
         grant(self.host, self.pin, 'delivery-deploy', deployed['id'])
         with self.session().locked() as s:
             self.assertEqual(delivery.execute(s, deployed['id'])['result']['result'], 'confirmed')
-        shutil.rmtree(self.source)
+        self.source.rename(self.source.with_name('source-removed'))
         state = self.read()
         state['subject'] = dict(state['subject'], head='later-source-subject')
         state['budget']['operations'] = self.policy['budget']['max_operations']
@@ -473,7 +473,7 @@ class SourceContent(unittest.TestCase):
         self.assertEqual(git.run('update-ref', git.ref, proposal['base'], proposal['candidate']).returncode, 0)
         state = self.read(); state['receipts'][proposal['id']]['result'] = 'pending'
         write(self.host, 'state.json', state)
-        shutil.rmtree(self.source)
+        self.source.rename(self.source.with_name('source-removed'))
         def recover():
             with self.session().locked() as s, patch.object(manifests, 'capture', side_effect=AssertionError('pending source IO')):
                 self.assertEqual(merge.query(s)['result'], 'not_applied')

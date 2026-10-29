@@ -222,16 +222,36 @@ class WindowsManifests(unittest.TestCase):
     def test_observed_same_length_write_after_payload_is_refused(self):
         leaf = self.root/'a'; leaf.write_bytes(b'before')
         original = self.native.NativeSource.read
-        changed = []
+        attempts = []; denials = []
         def altered(source, path, *args):
             result = original(source, path, *args)
             if path == 'a':
-                leaf.write_bytes(b'after!'); changed.append(True)
+                attempts.append(True)
+                try: leaf.write_bytes(b'after!')
+                except OSError: denials.append(True)
+            return result
+        with patch.object(self.native.NativeSource, 'read', altered):
+            try: result = self.api.capture(self.root, config())
+            except (ValueError, OSError): result = None
+        self.assertEqual(attempts, [True])
+        self.assertEqual(denials, [True], 'ordinary write must be denied through final observation')
+        self.assertIsNotNone(result, 'a denied writer must leave a valid stable observation')
+        self.assertEqual(next(e for e in result['entries'] if e['path']=='a')['sha256'],
+                         hashlib.sha256(b'before').hexdigest())
+        leaf.write_bytes(b'after!')  # Source handles must be released after capture.
+
+    def test_attribute_change_after_payload_invalidates_reobservation(self):
+        leaf = self.root/'a'; leaf.write_bytes(b'before')
+        original = self.native.NativeSource.read; attempts=[]
+        def altered(source, path, *args):
+            result = original(source, path, *args)
+            if path == 'a':
+                self.readonly(leaf); attempts.append(True)
             return result
         with patch.object(self.native.NativeSource, 'read', altered):
             with self.assertRaisesRegex(ValueError, 'changed'):
                 self.api.capture(self.root, config())
-        self.assertEqual(changed, [True])
+        self.assertEqual(attempts, [True])
 
     def test_attribute_only_junction_race_does_not_read_target(self):
         gate = self.root/'gate'; gate.mkdir()
@@ -281,11 +301,22 @@ class WindowsManifests(unittest.TestCase):
         leaf = self.root/'a'; leaf.write_bytes(b'before')
         with self.native.NativeSource(self.root) as source:
             observed = source.walk(config())
-            leaf.write_bytes(b'after!')
+            with self.assertRaises(OSError): leaf.write_bytes(b'after!')
+            wrong = list(observed['a']); wrong[1] += 1
             with patch.object(self.win, 'ReadFile', wraps=self.win.ReadFile) as read:
                 with self.assertRaisesRegex(ValueError, 'changed'):
-                    source.read('a', observed['a'], 32)
+                    source.read('a', tuple(wrong), 32)
                 read.assert_not_called()
+            self.assertEqual(source.read('a', observed['a'], 32), b'before')
+            self.assertEqual(source.read('a', observed['a'], 32), b'before')
+        leaf.write_bytes(b'after!')
+
+    def test_existing_writer_refuses_capture_without_source_payload(self):
+        leaf = self.root/'a'; leaf.write_bytes(b'before')
+        with leaf.open('r+b'), self.payload_observations() as (reads, _):
+            with self.assertRaises(OSError): self.api.capture(self.root, config())
+            self.assertEqual(reads, [])
+        self.assertIn('a', [e['path'] for e in self.api.capture(self.root, config())['entries']])
 
     def test_git_requires_explicit_disabled_native_filemode(self):
         head = self.repo()

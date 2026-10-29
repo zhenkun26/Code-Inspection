@@ -2,7 +2,11 @@
 
 No atomic snapshot or hostile-writer guarantee. Names and bytes are bounded;
 all traversal uses the existing no-reparse native backend. Handles pin the
-selected root chain and traversed directories until capture completes.
+selected root chain, traversed directories, and included files until capture
+completes. Retained file handles omit write/delete sharing so ordinary writes
+cannot exploit timestamp granularity between preflight and read. Attribute-only
+writers are not excluded by Windows share flags; the host must keep all source
+writers frozen throughout capture.
 """
 from contextlib import ExitStack
 import ctypes as c
@@ -29,6 +33,8 @@ class HandleInfo(c.Structure):
 
 HandleInformation = win.bind(win.K, 'GetFileInformationByHandle', win.w.BOOL,
                              win.HANDLE, c.POINTER(HandleInfo))
+SetFilePointer = win.bind(win.K, 'SetFilePointerEx', win.w.BOOL, win.HANDLE,
+                          c.c_int64, c.POINTER(c.c_int64), win.ULONG)
 
 
 def _streams(handle):
@@ -120,6 +126,7 @@ class NativeSource:
         self.path = self.root.path
         self.stack = None
         self.directories = {}
+        self.files = {}
 
     def __enter__(self):
         win.need(platform.machine().lower() in {'amd64', 'x86_64'}, 'UNKNOWN: native Windows x64 required')
@@ -172,7 +179,7 @@ class NativeSource:
                 if _covered(path, config['exclusions']): continue
                 relevant = _covered(path, config['scope']) or any(scope.startswith(path + '/') for scope in config['scope'])
                 if not relevant: continue
-                win.need(name.casefold() != '.git', 'UNKNOWN: nested/aliased Git repository unsupported')
+                win.need(name.casefold() != '.git', 'UNKNOWN: nested Git repository or aliased metadata unsupported')
                 win.need(not attrs & 0x400, 'UNKNOWN: source reparse point refused')
                 directory = bool(attrs & 0x10)
                 with win.opened(handle, name, directory=directory, pin=True, listing=directory) as child:
@@ -189,6 +196,16 @@ class NativeSource:
                         held = self.directories[path]
                         win.need(_stamp(held, True) == info, 'UNKNOWN: source directory changed')
                         descend(held, path, depth+1)
+                    elif path in result:
+                        if path not in self.files:
+                            win.need(len(self.files) < config['max_files'], 'UNKNOWN: manifest file handle limit')
+                            # Both opens coexist: there is no unpinned interval
+                            # between the named preflight and retained handle.
+                            # opened() files share only reads, never writes/deletes.
+                            held = self.stack.enter_context(win.opened(handle, name))
+                            self.files[path] = held
+                        win.need(_stamp(self.files[path], False) == info,
+                                 'UNKNOWN: source file changed during enumeration')
                     win.need(_stamp(child, directory) == info, 'UNKNOWN: source changed during enumeration')
             win.need(_stamp(handle, True) == before, 'UNKNOWN: source directory changed')
 
@@ -204,21 +221,24 @@ class NativeSource:
         names = win.parts(path)
         parent_path = '/'.join(names[:-1]) or '.'
         win.need(parent_path in self.directories, 'UNKNOWN: unobserved source directory')
-        parent = self.directories[parent_path]
-        with win.opened(parent, names[-1]) as leaf:
-            before = _stamp(leaf, False)
-            win.need(before == expected and before[3] == 1, 'UNKNOWN: source changed before read')
-            win.need(before[4] <= limit, 'UNKNOWN: manifest file/aggregate limit')
-            data = bytearray()
-            while len(data) <= limit:
-                buffer = c.create_string_buffer(min(65536, limit + 1 - len(data)))
-                count = win.ULONG()
-                win.wincheck(win.ReadFile(leaf, buffer, len(buffer), c.byref(count), None))
-                if not count.value: break
-                data.extend(buffer.raw[:count.value])
-            win.need(len(data) <= limit and len(data) == before[4] and _stamp(leaf, False) == expected,
-                     'UNKNOWN: source changed during read or limit exceeded')
-            return bytes(data)
+        win.need(path in self.files, 'UNKNOWN: unobserved source file')
+        leaf = self.files[path]
+        before = _stamp(leaf, False)
+        win.need(before == expected and before[3] == 1, 'UNKNOWN: source changed before read')
+        win.need(before[4] <= limit, 'UNKNOWN: manifest file/aggregate limit')
+        # The retained synchronous handle has its own cursor; repeated reads
+        # must start at byte zero without reopening or releasing its share lock.
+        win.wincheck(SetFilePointer(leaf, 0, None, 0))
+        data = bytearray()
+        while len(data) <= limit:
+            buffer = c.create_string_buffer(min(65536, limit + 1 - len(data)))
+            count = win.ULONG()
+            win.wincheck(win.ReadFile(leaf, buffer, len(buffer), c.byref(count), None))
+            if not count.value: break
+            data.extend(buffer.raw[:count.value])
+        win.need(len(data) <= limit and len(data) == before[4] and _stamp(leaf, False) == expected,
+                 'UNKNOWN: source changed during read or limit exceeded')
+        return bytes(data)
 
     def verify_root(self):
         win.need(_stamp(self.root.handle, True)[:2] == self.root_identity, 'UNKNOWN: source root changed')
