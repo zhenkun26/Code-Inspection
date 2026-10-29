@@ -4,7 +4,7 @@ import math
 from interfaces.lifecycle.core import load, save, keys, text, subject, digest, timestamp, now, require
 from interfaces.lifecycle.merge import query as merge_query, validate_plan as merge_validate, validate_receipt as merge_receipt
 from interfaces.lifecycle.review import evaluate as pr_evaluate
-from interfaces.lifecycle import artifacts
+from interfaces.lifecycle import artifacts, provenance
 from datetime import timedelta
 
 CAPABILITY={'deploy':'deployment','flag-set':'flags','pause':'flags','promote':'channels',
@@ -97,11 +97,13 @@ def validate_plan(s,operation,provider,seen=None):
     text(operation);plans=s.state['delivery'].get('plans',{})
     require(isinstance(plans,dict) and operation in plans,'unknown operation')
     proposal=copy.deepcopy(plans[operation])
-    require(isinstance(proposal,dict) and proposal.get('schema') in {'delivery-proposal/v2','delivery-proposal/v3'},
+    require(isinstance(proposal,dict) and proposal.get('schema') in {'delivery-proposal/v2','delivery-proposal/v3','delivery-proposal/v4'},
             'legacy record requires explicit replan/migration: delivery proposal')
     keys(proposal,['schema','action','parameters','expected_provider','provider_snapshot',
-                   'policy_sha','subject','source','simulation','id'],['artifact_content'])
-    require(('artifact_content' in proposal)==(proposal['schema']=='delivery-proposal/v3'),
+                   'policy_sha','subject','source','simulation','id'],['artifact_content','build_provenance'])
+    require((proposal['schema']=='delivery-proposal/v4' if 'build_provenance' in proposal else
+             proposal['schema']=='delivery-proposal/v3' if 'artifact_content' in proposal else
+             proposal['schema']=='delivery-proposal/v2'),
             'delivery content proposal schema mismatch')
     require(proposal['id']==operation,'delivery operation/map-key mismatch')
     hash_value(operation)
@@ -144,6 +146,11 @@ def validate_plan(s,operation,provider,seen=None):
     else:keys(source,[])
     require(content is None or action in {'deploy','promote','rollback'} or
             (action=='flag-set' and value['enabled']),'delivery content action mismatch')
+    if 'build_provenance' in proposal:
+        action_name,origin=provenance_context(s,proposal)
+        require(action_name is not None,'delivery provenance action mismatch')
+        provenance.validate(s,proposal['build_provenance'],origin['source_subject'],
+                            origin['tree'],content,action_name,proposal)
     # The nonrecursive snapshot still protects the complete prior operation map.
     prior={}
     for identifier,receipt in provider['operations'].items():
@@ -275,7 +282,8 @@ class LocalSimulation:
         if request and request['result']=='unknown':absent='unknown'
         return {'simulation':True,'operation':operation,'result':receipt if receipt is not None else
                 {'result':absent},'state':state,
-                'content_binding':artifacts.report(proposal.get('artifact_content'))}
+                'content_binding':artifacts.report(proposal.get('artifact_content')),
+                'provenance_binding':provenance.report(proposal.get('build_provenance'))}
     def apply(self,plan,snapshot=None):
         self.s.require_usable()
         state=self.read();proposal,request,receipt=validated_operation(self.s,plan['id'],state)
@@ -384,6 +392,32 @@ def deployment_source(s,state):
     raise ValueError('HOLD: confirmed deployment of the current validated artifact required')
 
 
+def provenance_context(s,proposal):
+    action=proposal['action']
+    if action in {'deploy','rollback','promote'} or (action=='flag-set' and proposal['parameters']['enabled']):
+        name='delivery-flag-enable' if action=='flag-set' else 'delivery-'+action
+        source=proposal['source'].get('merge_plan')
+        return name,historical_merge(s,source) if source is not None else None
+    return None,None
+
+
+def fresh_provenance(s,proposal):
+    if 'build_provenance' not in proposal:
+        action=proposal['action']
+        name=('delivery-flag-enable' if action=='flag-set' and proposal['parameters']['enabled']
+              else 'delivery-'+action)
+        require(not provenance.required(s,name),'UNKNOWN: required build provenance missing; replan')
+        return
+    name,origin=provenance_context(s,proposal)
+    if name is None:return
+    if origin is None:
+        require(not provenance.required(s,name) and 'build_provenance' not in proposal,
+                'UNKNOWN: build provenance historical source missing')
+        return
+    provenance.fresh(s,proposal.get('build_provenance'),origin['source_subject'],
+                     origin['tree'],proposal.get('artifact_content'),name,proposal)
+
+
 def fresh_conditions(s,p,proposal,state):
     artifacts.policy_config(s)
     require(proposal['subject']==s.state['subject'],'stale delivery subject')
@@ -411,6 +445,7 @@ def fresh_conditions(s,p,proposal,state):
         deployed=validate_plan(s,proposal['source']['deployment_operation'],state)
         require(proposal.get('artifact_content')==deployed.get('artifact_content'),
                 'HOLD: deployment content relation changed; replan')
+    fresh_provenance(s,proposal)
     if action=='promote' or (action=='flag-set' and v['enabled'] and v['cohort']!=p.config['initial_cohort']):
         require(p.config['capabilities']['observation']['enabled'] and observation_status(s,p,state)['status']=='PASS',
                 'HOLD: observation no longer valid')
@@ -418,10 +453,15 @@ def fresh_conditions(s,p,proposal,state):
 
 def plan(s,record):
     s.require_usable()
-    keys(record,['schema','action','parameters'],['artifact_content','artifact_source_merge'])
+    keys(record,['schema','action','parameters'],['artifact_content','artifact_source_merge','build_provenance'])
     require(record['schema']=='delivery-plan/v1','delivery plan schema')
     action=record['action'];v=record['parameters'];parameters(action,v)
     artifacts.policy_config(s)
+    provenance.config(s)
+    require('build_provenance' not in record or type(record['build_provenance']) is dict,
+            'UNKNOWN: supplied build provenance descriptor required')
+    require('build_provenance' not in record or action=='rollback',
+            'build provenance descriptor override is only for rollback')
     require(('artifact_content' in record)==('artifact_source_merge' in record) and
             ('artifact_content' not in record or action=='rollback'),
             'rollback artifact descriptor and historical merge source required together')
@@ -456,6 +496,22 @@ def plan(s,record):
             'expected_provider':digest(snapshot),'provider_snapshot':snapshot,'policy_sha':s.pin,
             'subject':copy.deepcopy(s.state['subject']),'source':source,'simulation':True}
     if content is not None:result.update(schema='delivery-proposal/v3',artifact_content=content)
+    name,origin=(provenance_context(s,result)
+                 if provenance.config(s) is not None or 'build_provenance' in record else (None,None))
+    descriptor=record.get('build_provenance')
+    if descriptor is None and name is not None and origin is not None:
+        previous=(validate_plan(s,source['deployment_operation'],state)
+                  if 'deployment_operation' in source else origin)
+        stored=previous.get('build_provenance')
+        if stored is not None:descriptor=copy.deepcopy(stored['descriptor'])
+    if descriptor is not None:
+        require(origin is not None,'UNKNOWN: build provenance source missing')
+        result['build_provenance']=provenance.capture(s,descriptor,origin['source_subject'],
+            origin['tree'],content,name,result)
+        result['schema']='delivery-proposal/v4'
+    else:
+        require(name is None or not provenance.required(s,name),
+                'UNKNOWN: required build provenance descriptor missing')
     result['id']=digest(result)
     s.charge(operation='delivery-plan');s.state['delivery'].setdefault('plans',{})[result['id']]=result
     s.event('delivery-plan',result);s.persist();return copy.deepcopy(result)

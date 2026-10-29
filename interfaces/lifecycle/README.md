@@ -137,3 +137,7 @@ python3 -O -B validation/lifecycle/test_lifecycle.py
 ## 强制终止后的临时文件
 
 `temp-report` 提供持锁、有界、仅元数据的残留检查，不依赖账本可解析。它不删除、恢复或重放任何记录，也不判断预算或批准有效性。所有历史残留归属均为 UNKNOWN，保留待宿主处理。具体命令、上限和后续清理前提见 [临时状态检查](../../docs/temporary-state.md)。
+
+## 可选构建来源核验
+
+[构建来源契约](../../docs/build-provenance.md)在内容摘要与宿主声明之外，提供由受信 Python 宿主注入、政策选择的核验器接口。默认 CLI 不加载核验器；必需能力缺失返回 UNKNOWN/HOLD。带核验结果的计划使用 merge-proposal/v4、delivery-proposal/v4，绑定精确来源、组合树、配置、产物、run 和动作意图；新执行重核，旧合法尝试只查历史、不重收费或重执行。未内置真实签名/CI 身份认证，合成交付 provider 保持模拟。

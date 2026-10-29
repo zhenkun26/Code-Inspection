@@ -36,6 +36,8 @@ Supply the target, original requirement, acceptance criteria, trusted policy, pe
 
 No native hosted-CI/SARIF result importer, identity authentication or production deployment/flag/metrics/rollback provider is included. No automatic PR creation, comments, real-project merging or deployment. Evaluation datasets and scoring are not implemented.
 
+The optional [build provenance contract](docs/build-provenance.md) accepts a policy-selected verifier supplied by a trusted Python host. It binds the result to exact source/tree/configuration/artifact/run and plan intent; no external CI identity or signature verifier is bundled. Without the required capability, new actions remain UNKNOWN/HOLD. Historical recovery does not renew authentication.
+
 ## Run the offline example
 
 From the checkout root:
