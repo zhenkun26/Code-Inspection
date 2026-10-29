@@ -78,6 +78,8 @@ PR/集成结果展示所有已配置检查，逐项给出 required 和 blocking�
 
 初始 `pre-pr-handoff/v1`：task_id、五字段 subject（base/head/worktree_digest/ci_config_digest/artifact_digest）、budget(rounds/operations)、requirements_ref、history_ref、findings。宿主核对 PR 前原始证据后转录，不能只导入一个 PASS；历史 findings 按候选继续核验，不默认为已经解决。state 初始化只允许一次，不会在阶段切换时重置预算。
 
+可选 `source_content` 政策和 handoff/advance sidecar 将 [源目录/index/工作树清单](../../docs/source-manifests.md) 绑定到既有 `worktree_digest`，不增加第六个 subject 字段。旧标签不自动升级；新动作按政策重新核对源，合法历史回执恢复保持无新采集/收费。支持范围、配置和非原子快照限制以该文档为准。
+
 `review-batch/v1` 包含 evidence 和 findings。证据字段见 [生成器 evidence 函数](../../validation/lifecycle/fixture.py)：精确 subject/config/scope/status/complete、observed_at/expires_at、provider/run/job/attempt/tool_version/context_id/reviewer、raw.path/sha256。原始文件受 1 MiB/no-follow 限制，摘要在导入时核验并保存；该接口不持续监控外部原始文件，也不提供不可变存储，宿主须归档对应字节供后续审计；partial、过期、错对象或覆盖不足不转 PASS。同 check 按 provider/job/reviewer/context 分组，按受信宿主核验的 observed_at 选择最新观察，不按导入顺序。run/attempt 为不透明标识，不用于排序；同一时刻的实质观察冲突记 UNKNOWN，需后续观察解除；任一必需检查的当前失败/未知仍阻断，不能用另一视角 PASS 覆盖；可选检查的结果保持可见。所有旧失败留存，高风险人数也按最新有效尝试核对。增量依赖实际身份与范围，不按评论时间；跨身份复用需要宿主核查关系后导入新的证明记录，保留原出处，不直接改旧 PASS 的 subject。
 
 候选字段：id/subject/location/trigger/impact/severity/confidence_basis/attribution/attribution_basis/source/evidence_refs。无位置用明确“无法定位”并解释来源，不静默丢掉 off-diff 发现。候选默认阻断直至宿主核验；`finding-decision/v1` 由受信 reviewer 在 host-root 提供 actor/subject/finding/fact/disposition/blocking/reason/evidence_refs/duplicate_of。关闭需当前完整核验证据；只说暂缓/有意/接受风险不能关闭，本参考实现尚不提供豁免控制。去重保留两份观察/决策及关联，不按票数；新观察可重开，缺席不自动解决。程序检查核验记录关联，不证明其语义真实。

@@ -80,6 +80,8 @@ Check results retain optional failures separately from blocking decisions. N_A r
 
 Optional [single-file artifact binding](docs/artifact-content.md) checks actual bytes and binds source/tree/configuration associations to new plans. Trusted policy selects required actions; legacy labels remain unverified. Delivery consumes the same bounded in-memory snapshot it verifies, while the provider remains a local simulation. Build provenance and writer isolation are host assertions, not authentication.
 
+Optional [source manifests](docs/source-manifests.md) bind scoped directory inputs or separate HEAD/index/actual-worktree projections to review identity. The first collector is POSIX-only; Windows explicitly reports this new capability unsupported. Scope, exclusions and limits are part of the identity. It is not an atomic directory snapshot, directory-deployment consumer or authenticated build provenance; dirty source cannot silently become a committed merge candidate.
+
 New charged attempts save a versioned started record with the counter increment; started does not mean the action succeeded. A failed ledger save leaves durability unknown and fences that Session until a validated reload. Old usage is preserved without invented history, and accepted-operation recovery remains uncharged.
 
 ## Verification and project layout

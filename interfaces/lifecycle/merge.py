@@ -10,7 +10,7 @@ from interfaces.lifecycle.core import load, keys, text, digest, require, now, su
 from support.local_files import is_link, read_bytes
 from support.git_runtime import git_environment
 from interfaces.lifecycle.review import evaluate
-from interfaces.lifecycle import artifacts
+from interfaces.lifecycle import artifacts, source_content
 
 class LocalGit:
     def __init__(self, config, metrics=None):
@@ -69,6 +69,8 @@ def prepare(s,request):
     require(not artifacts.required(s,'merge-execute') or 'artifact_content' in request,
             'UNKNOWN: artifact content proof required; replan with a file descriptor')
     require(evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: PR gate incomplete')
+    source=copy.deepcopy(s.state.get('source_content'))
+    source_content.require_committed(source,s.state['subject'])
     g=LocalGit(s.policy['merge'],metrics=getattr(s,'metrics',None));base=g.oid(request['base']);head=g.oid(request['head'])
     require(base==s.state['subject']['base'] and head==s.state['subject']['head'],'PR/combination identity mismatch')
     require(g.target()==base,'HOLD: target drift before preparation')
@@ -91,6 +93,7 @@ def prepare(s,request):
     plan={'repository':str(g.root),'target_ref':g.ref,'method':'merge_commit','base':base,'head':head,
           'candidate':candidate,'tree':tree,'subject':identity,'source_subject':dict(s.state['subject']),'policy_sha':s.pin}
     if content is not None:plan.update(schema='merge-proposal/v2',artifact_content=content)
+    if source is not None:plan.update(schema='merge-proposal/v3',source_content=source)
     plan['id']=digest(plan);s.state['merge']=plan;s.event('merge-prepare',{'plan':plan});s.persist()
     return {'status':'NOT_RUN','recommendation':'HOLD','plan':plan,'reason':'integration evidence and independent execution authority required'}
 
@@ -101,9 +104,10 @@ def validate_plan(s,plan=None):
     if plan is None:plan=s.state['merge']
     require(plan,'merge plan required')
     keys(plan,['repository','target_ref','method','base','head','candidate','tree',
-               'subject','source_subject','policy_sha','id'],['schema','artifact_content'])
-    require(('schema' in plan)==('artifact_content' in plan) and
-            ('schema' not in plan or plan['schema']=='merge-proposal/v2'),
+               'subject','source_subject','policy_sha','id'],['schema','artifact_content','source_content'])
+    require((plan.get('schema')=='merge-proposal/v3' if 'source_content' in plan else
+             plan.get('schema')=='merge-proposal/v2' if 'artifact_content' in plan else
+             'schema' not in plan),
             'merge content proposal schema mismatch')
     plan=copy.deepcopy(plan)
     for name in ['repository','target_ref','method','base','head','candidate','tree','policy_sha','id']:text(plan[name])
@@ -121,6 +125,13 @@ def validate_plan(s,plan=None):
     require(plan['subject']==expected,'merge combination identity mismatch')
     if 'artifact_content' in plan:
         artifacts.validate(plan['artifact_content'],source,plan['tree'],plan['subject']['artifact_digest'])
+    if 'source_content' in plan:
+        source_content.require_committed(plan['source_content'],source)
+        # This query returns an ASCII object ID, never arbitrary commit bytes.
+        head=g.run('rev-parse','--verify',plan['head']+'^{tree}')
+        require(head.returncode==0
+                and head.stdout.strip()==plan['source_content']['manifest']['head_tree'],
+                'source manifest committed tree mismatch')
     result=g.run('cat-file','commit',plan['candidate'])
     require(result.returncode==0,'candidate commit unavailable')
     headers=result.stdout.split('\n\n',1)[0].splitlines()
@@ -170,6 +181,7 @@ def _preflight(s,plan,g,check_content=True):
     if prior['recommendation']!='READY_FOR_NEXT':result['reasons'].append('PR gate no longer satisfied')
     if g.target()!=plan['base']:result['reasons'].append('target drift')
     if plan['source_subject']!=s.state['subject']:result['reasons'].append('candidate stale')
+    if plan.get('source_content')!=s.state.get('source_content'):result['reasons'].append('source content relation changed')
     combined=g.run('merge-tree','--write-tree',plan['base'],plan['head'])
     require(combined.returncode==0 and combined.stdout.splitlines() and combined.stdout.splitlines()[0]==plan['tree'],
             'merge combination tree mismatch or unavailable')
@@ -199,7 +211,8 @@ def _query(plan,g,receipt):
     state='confirmed' if actual==plan['candidate'] and receipt is not None and receipt['result'] in {'pending','unknown','confirmed'} else 'not_applied' if actual==plan['base'] else 'unknown'
     return {'operation':plan['id'],'result':state,'actual_target':actual,'receipt':receipt,
             'source':'local-git-ref-read','simulation':False,'isolated_reference':True,
-            'content_binding':artifacts.report(plan.get('artifact_content'))}
+            'content_binding':artifacts.report(plan.get('artifact_content')),
+            'source_binding':source_content.report(plan.get('source_content'))}
 
 
 def query(s):
