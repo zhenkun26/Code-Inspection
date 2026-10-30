@@ -60,6 +60,8 @@ Historical plan/receipt validation checks stored structure and associations with
 
 Legacy label records remain readable, unverified and unchanged. New required actions cannot proceed without a proof; absent optional proof is not automatically a product FAIL. Unknown/missing content produces UNKNOWN/HOLD, while existing valid recovery still obeys the original strict receipt/intent rules. No history is backfilled, no budget is reset, and malformed/unbound old receipts are not upgraded.
 
+The separate optional [build provenance contract](build-provenance.md) can bind a policy-selected host verifier result to new v4 plans. It does not change this content proof into an authenticated-build claim or upgrade old records.
+
 ## Verification scope
 
 Run the maintained focused checks from the checkout when disposable local fixtures are authorized:

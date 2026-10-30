@@ -10,7 +10,7 @@ from interfaces.lifecycle.core import load, keys, text, digest, require, now, su
 from support.local_files import is_link, read_bytes
 from support.git_runtime import git_environment
 from interfaces.lifecycle.review import evaluate
-from interfaces.lifecycle import artifacts, source_content
+from interfaces.lifecycle import artifacts, source_content, provenance
 
 class LocalGit:
     def __init__(self, config, metrics=None):
@@ -63,9 +63,12 @@ class LocalGit:
 
 def prepare(s,request):
     s.require_usable()
-    keys(request,['schema','base','head','integration_artifact'],['artifact_content'])
+    keys(request,['schema','base','head','integration_artifact'],['artifact_content','build_provenance'])
     require(request['schema']=='merge-plan/v1','merge plan schema');text(request['integration_artifact'])
     artifacts.policy_config(s)
+    provenance.config(s)
+    require(not provenance.required(s,'merge-execute') or 'build_provenance' in request,
+            'UNKNOWN: required build provenance descriptor missing')
     require(not artifacts.required(s,'merge-execute') or 'artifact_content' in request,
             'UNKNOWN: artifact content proof required; replan with a file descriptor')
     require(evaluate(s)['recommendation']=='READY_FOR_NEXT','HOLD: PR gate incomplete')
@@ -94,6 +97,10 @@ def prepare(s,request):
           'candidate':candidate,'tree':tree,'subject':identity,'source_subject':dict(s.state['subject']),'policy_sha':s.pin}
     if content is not None:plan.update(schema='merge-proposal/v2',artifact_content=content)
     if source is not None:plan.update(schema='merge-proposal/v3',source_content=source)
+    if 'build_provenance' in request:
+        plan['build_provenance']=provenance.capture(s,request['build_provenance'],
+            plan['source_subject'],tree,content,'merge-execute',plan)
+        plan['schema']='merge-proposal/v4'
     plan['id']=digest(plan);s.state['merge']=plan;s.event('merge-prepare',{'plan':plan});s.persist()
     return {'status':'NOT_RUN','recommendation':'HOLD','plan':plan,'reason':'integration evidence and independent execution authority required'}
 
@@ -104,8 +111,9 @@ def validate_plan(s,plan=None):
     if plan is None:plan=s.state['merge']
     require(plan,'merge plan required')
     keys(plan,['repository','target_ref','method','base','head','candidate','tree',
-               'subject','source_subject','policy_sha','id'],['schema','artifact_content','source_content'])
-    require((plan.get('schema')=='merge-proposal/v3' if 'source_content' in plan else
+               'subject','source_subject','policy_sha','id'],['schema','artifact_content','source_content','build_provenance'])
+    require((plan.get('schema')=='merge-proposal/v4' if 'build_provenance' in plan else
+             plan.get('schema')=='merge-proposal/v3' if 'source_content' in plan else
              plan.get('schema')=='merge-proposal/v2' if 'artifact_content' in plan else
              'schema' not in plan),
             'merge content proposal schema mismatch')
@@ -125,6 +133,9 @@ def validate_plan(s,plan=None):
     require(plan['subject']==expected,'merge combination identity mismatch')
     if 'artifact_content' in plan:
         artifacts.validate(plan['artifact_content'],source,plan['tree'],plan['subject']['artifact_digest'])
+    if 'build_provenance' in plan:
+        provenance.validate(s,plan['build_provenance'],source,plan['tree'],
+                            plan.get('artifact_content'),'merge-execute',plan)
     if 'source_content' in plan:
         source_content.require_committed(plan['source_content'],source)
         # This query returns an ASCII object ID, never arbitrary commit bytes.
@@ -194,6 +205,16 @@ def _preflight(s,plan,g,check_content=True):
         except (ValueError,OSError) as exc:
             result['checks'].append({'id':'artifact-content','status':'UNKNOWN','reason':str(exc)})
             result['reasons'].append('artifact content unavailable or inconsistent')
+    if check_content:
+        try:
+            provenance.fresh(s,plan.get('build_provenance'),plan['source_subject'],
+                             plan['tree'],plan.get('artifact_content'),'merge-execute',plan)
+            if 'build_provenance' in plan:
+                result['checks'].append({'id':'build-provenance','status':'PASS',
+                                         'scope':'trusted-host-verifier contract'})
+        except (ValueError,OSError):
+            result['checks'].append({'id':'build-provenance','status':'UNKNOWN'})
+            result['reasons'].append('build provenance unavailable or rejected')
     if not s.authorized('merge-execute',plan['id']):result['reasons'].append('merge execution authority missing')
     if s.state['budget']['operations']>=s.policy['budget']['max_operations']:result['reasons'].append('operation budget exhausted')
     if result['reasons']:result=s.output('merge',result['checks'],result['reasons'])
@@ -212,7 +233,8 @@ def _query(plan,g,receipt):
     return {'operation':plan['id'],'result':state,'actual_target':actual,'receipt':receipt,
             'source':'local-git-ref-read','simulation':False,'isolated_reference':True,
             'content_binding':artifacts.report(plan.get('artifact_content')),
-            'source_binding':source_content.report(plan.get('source_content'))}
+            'source_binding':source_content.report(plan.get('source_content')),
+            'provenance_binding':provenance.report(plan.get('build_provenance'))}
 
 
 def query(s):
