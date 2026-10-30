@@ -32,9 +32,11 @@ cd Code-Inspection
 | [PR前](skills/pre-pr-review/SKILL.md) | 指令Skill与五份共享协议；宿主支持时使用真实运行验证及独立审查。 |
 | [PR中](skills/pr-in-review/SKILL.md) | 本地记录执行层，处理版本证据、发现处置、连续预算和宿主提供的真人决定记录，可导入安全结果。 |
 | [合并时](skills/merge-review/SKILL.md) | 真实受控裸Git候选、集成证据、expected-old条件更新和回执查询，仅显式隔离仓库及merge commit。 |
-| [合并后](skills/delivery-review/SKILL.md) | 可选本地模拟：计划、授权动作、有限观察和恢复交接。 |
+| [合并后](skills/delivery-review/SKILL.md) | 可选本地模拟，以及受信宿主的 deploy/rollback 接口；不内置生产 provider。 |
 
 未包含原生托管CI/SARIF结果导入器、身份认证或生产部署/开关/指标/回滚provider，不自动创建PR、评论、合并真实项目或部署。未实现评测数据集及评分器。
+
+可选[宿主交付接口](docs/host-delivery.md)接受受信 Python 宿主按政策提供的 deploy/rollback provider。缺能力保持 UNKNOWN/HOLD，默认 CLI 不安装 provider；条件更新、身份认证和持久幂等仍需使用者实际接入及验收。其他真实交付动作暂不支持。
 
 可选[构建来源核验契约](docs/build-provenance.md)接受受信 Python 宿主按政策提供的核验器，将结果绑定到精确来源、组合树、配置、产物、运行及计划。项目不内置外部 CI 身份或签名核验器；必需能力未接入时，新动作保持 UNKNOWN/HOLD，历史恢复不代表重新认证。
 
@@ -80,7 +82,7 @@ python3 -B validation/mutation_check.py
 
 检查结果保留可选失败，并与阻断判定分开。N_A 要求当前、限定范围的宿主适用性记录；仅有旧理由时记 UNKNOWN。CLI 预算报告区分既有账本容量、本次调用观察到的工作量和未知外部费用。容量不是授权，预算耗尽后安全回执查询仍可用。见 [记录与计量契约](interfaces/lifecycle/README.md)。
 
-可选的[单文件产物绑定](docs/artifact-content.md)核对实际字节，并将来源、Git tree 与配置关联纳入新计划。必需动作由受信政策选择；旧标签仍是未核验记录。交付消费同一次校验得到的有界内存快照，后端仍是本地模拟。构建来源与写入隔离属于宿主声明，不是身份认证。
+可选的[单文件产物绑定](docs/artifact-content.md)核对实际字节，并将来源、Git tree 与配置关联纳入新计划。必需动作由受信政策选择；旧标签仍是未核验记录。交付消费同一次校验得到的有界内存快照，后端可为本地模拟或显式注入的受信宿主适配器。构建来源与写入隔离属于宿主声明，不是身份认证。
 
 可选的[源输入清单](docs/source-manifests.md)将声明范围内的目录输入，或分离的 HEAD/index/实际工作树投影绑定到审查身份。采集器支持 POSIX 和[平台说明](docs/windows-support.md)限定的 Windows NTFS 配置；原生采集须通过对应版本的 Windows 检查。Windows 只读属性与 Git index 的执行模式分别记录。范围、排除和上限均参与身份。它不是目录原子快照、目录部署消费接口或构建来源认证，也不能把脏工作树悄悄当作已提交的合并候选。
 

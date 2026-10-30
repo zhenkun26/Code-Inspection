@@ -54,7 +54,7 @@ def main():
                 elif c=='merge-execute':out=merge.execute(s)
                 elif c=='merge-query':out=merge.query(s)
                 elif c=='delivery-execute':require(args.operation,'operation required');out=delivery.execute(s,args.operation)
-                elif c=='delivery-query':require(args.operation,'operation required');out=delivery.LocalSimulation(s).query(args.operation)
+                elif c=='delivery-query':require(args.operation,'operation required');out=delivery.query(s,args.operation)
                 elif c=='delivery-status':out=delivery.evaluate(s)
                 elif c=='export':out={'schema':'lifecycle-handoff/v1','state':s.state,'pr_decision':review.evaluate(s),'publication':'NOT_RUN'}
         out['budget_report']=budget_report(s,metrics);out['authorizes_action']=False

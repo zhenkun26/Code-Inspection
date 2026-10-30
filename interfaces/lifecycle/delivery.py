@@ -251,7 +251,7 @@ class LocalSimulation:
     def __init__(self,s):
         s.require_usable()
         self.s=s
-        ledger=s.state['delivery'];keys(ledger,[],['plans','requests','observations'])
+        ledger=s.state['delivery'];keys(ledger,[],['plans','requests','observations','host_results'])
         for name in ['plans','requests']:
             require(isinstance(ledger.get(name,{}),dict),'delivery '+name+' map')
             for operation in ledger.get(name,{}):hash_value(operation)
@@ -312,6 +312,8 @@ class LocalSimulation:
 
 def observe(s,record):
     s.require_usable()
+    require('delivery_provider' not in s.policy,
+            'UNKNOWN: host provider observation is not supported by this interface')
     p=LocalSimulation(s);state=p.read();o=p.config['observation']
     keys(record,['schema','artifact','target','cohort','config','window_start','window_end','source','query','samples','value','complete','observed_at'])
     require(record['schema']=='observation/v1','observation schema');text(record['source']);text(record['query'])
@@ -346,6 +348,9 @@ def observation_status(s,p,state):
 
 
 def evaluate(s):
+    if 'delivery_provider' in s.policy:
+        from interfaces.lifecycle import host_delivery
+        return host_delivery.evaluate(s)
     p=LocalSimulation(s)
     if not p.config['enabled']:return s.output('post_merge',[{'id':'module','status':'NOT_RUN','reason':'explicitly not enabled; stage not entered; no online acceptance claimed'}],[])
     state=p.read();checks=[]
@@ -453,6 +458,9 @@ def fresh_conditions(s,p,proposal,state):
 
 def plan(s,record):
     s.require_usable()
+    if 'delivery_provider' in s.policy:
+        from interfaces.lifecycle import host_delivery
+        return host_delivery.plan(s,record)
     keys(record,['schema','action','parameters'],['artifact_content','artifact_source_merge','build_provenance'])
     require(record['schema']=='delivery-plan/v1','delivery plan schema')
     action=record['action'];v=record['parameters'];parameters(action,v)
@@ -517,11 +525,31 @@ def plan(s,record):
     s.event('delivery-plan',result);s.persist();return copy.deepcopy(result)
 
 
+def _host_operation(s,operation):
+    proposal=s.state['delivery'].get('plans',{}).get(operation)
+    schema=proposal.get('schema') if isinstance(proposal,dict) else None
+    legacy={'delivery-proposal/v2','delivery-proposal/v3','delivery-proposal/v4'}
+    return schema=='host-delivery-proposal/v1' or ('delivery_provider' in s.policy and schema not in legacy)
+
+
+def query(s,operation):
+    s.require_usable()
+    if _host_operation(s,operation):
+        from interfaces.lifecycle import host_delivery
+        return host_delivery.query(s,operation)
+    return LocalSimulation(s).query(operation)
+
+
 def execute(s,operation):
     s.require_usable()
+    if _host_operation(s,operation):
+        from interfaces.lifecycle import host_delivery
+        return host_delivery.execute(s,operation)
     p=LocalSimulation(s);state=p.read();proposal,request,receipt=validated_operation(s,operation,state)
     # An existing exact attempt is queried, never replayed or charged again.
     if request is not None or receipt is not None:return p.query(operation)
+    require('delivery_provider' not in s.policy,
+            'UNKNOWN: selected host provider cannot start a fresh simulation action')
     fresh_conditions(s,p,proposal,state)
     snapshot=None
     if proposal['action'] in {'deploy','rollback'}:

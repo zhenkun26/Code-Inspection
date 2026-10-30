@@ -61,13 +61,18 @@ def save(root, name, value):
             raise
 
 class Session:
-    def __init__(self, host_root, policy_sha, metrics=None, *, verifiers=None):
+    def __init__(self, host_root, policy_sha, metrics=None, *, verifiers=None, delivery_providers=None):
         self.metrics = metrics
         # Only trusted host Python code can supply capabilities; records cannot.
         require(verifiers is None or (type(verifiers) is dict and all(
             isinstance(k,str) and callable(v) for k,v in verifiers.items())),
             'trusted verifier registry required')
         self.verifiers = dict(verifiers or {})
+        require(delivery_providers is None or (type(delivery_providers) is dict and all(
+            isinstance(k,str) and bool(k.strip()) and all(callable(getattr(v,name,None))
+                for name in ('read','apply','query')) for k,v in delivery_providers.items())),
+            'trusted delivery provider registry required')
+        self.delivery_providers = dict(delivery_providers or {})
         self.accounting_trusted = False
         self.accounting_durability = 'unknown'
         self.current_attempt = None
@@ -79,7 +84,7 @@ class Session:
         self.policy = decode_json(raw)
         p = self.policy
         keys(p, ['schema','task_id','risk','checks','budget','humans','reviewers','high_expert_count',
-                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content','source_content','build_provenance'])
+                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content','source_content','build_provenance','delivery_provider'])
         require(p['schema']=='lifecycle-policy/v1', 'policy schema')
         text(p['task_id']); require(p['risk'] in {'low','medium','high'}, 'risk')
         require(type(p['low_auto']) is bool, 'low_auto boolean')

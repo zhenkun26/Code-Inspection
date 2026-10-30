@@ -18,6 +18,7 @@
 | review.py | 证据与候选导入、核验记录、稳定 ID/原始观察、去重关联/争议、版本失效、四道逻辑门禁 | 原始需求/代码语义核验、CI 实际取得与来源真实性；不自动调用模型或测试工具 |
 | merge.py / LocalGit | prepare/preflight/execute/query；隔离裸 Git 候选、集成证据、expected-old 原子 ref 更新、实际 ref 回执 | 只支持显式隔离标记的本地 SHA-1 bare repo、merge_commit；不支持任意用户仓库、远端、squash/rebase/队列供应商 |
 | delivery.py / LocalSimulation | plan/read/apply/query、可选能力、有限观察、幂等请求与回执；pause/off/rollback/forward-fix 分开 | 仅本地模拟状态；无真实部署、传播延迟、指标服务、恢复或生产健康证明 |
+| host_delivery.py / 宿主注入对象 | deploy/rollback 的政策选择、精确意图、条件前置状态、单次调用与回执恢复 | 无内置生产连接器；认证、条件更新与持久幂等须宿主提供并验收 |
 | cli.py | 明确命令到上述能力的入口 | 不加载任意配置指定的 Python 类/插件/命令 |
 
 真实连接器可在可信宿主中实现相同职责：只读取得身份/检查/人工决定；prepare 固定组合；preflight 核对有效证据；execute 按单独授权和可靠条件更新；query 查询真实结果。交付 provider 的 read/apply/query 必须分别返回实际身份、幂等关联和确认/失败/未知结果。不要直接替换函数名就假称获得原子性/权限或生产验收；目前 CLI 只选择本地两个后端。没有能力就报告 BLOCKED/UNKNOWN，不能退回普通 merge 或猜测成功。
@@ -28,7 +29,7 @@
 
 合并回执使用 `merge-receipt/v2`，绑定 operation、policy、repository、target_ref、base 和 candidate。查询先核对计划/回执关联；已知失败不能仅因当前 ref 恰好相同就归因为该次成功。合法 pending/unknown 尝试可通过实际目标读数协调丢失的响应，重复执行不会再次写入。历史查询不要求当前批准仍有效、当前主体不变或剩余执行预算；它不授予新动作，也不证明后来仍保持同一状态。
 
-交付输入仍为 `delivery-plan/v1`；无内容证明的存储计划为 `delivery-proposal/v2`，带内容证明的新计划为 `delivery-proposal/v3`。`provider_snapshot` 保存非递归 provider 状态及 operations 的摘要，`expected_provider` 是该快照的规范摘要。动作、参数、来源、目标及前置状态都进入计划 ID。新请求/回执分别使用 `delivery-request/v2`、`delivery-receipt/v2`，关联精确计划和结果状态；执行重查当前能力与回滚数据兼容性。回执确认的是该次本地模拟动作，不能据历史回执宣称当前产物、目标或群体仍未变化。
+本地模拟交付输入仍为 `delivery-plan/v1`；无内容证明的存储计划为 `delivery-proposal/v2`，带内容证明的新计划为 `delivery-proposal/v3`。`provider_snapshot` 保存非递归 provider 状态及 operations 的摘要，`expected_provider` 是该快照的规范摘要。动作、参数、来源、目标及前置状态都进入计划 ID。新请求/回执分别使用 `delivery-request/v2`、`delivery-receipt/v2`，关联精确计划和结果状态；执行重查当前能力与回滚数据兼容性。回执确认的是该次本地模拟动作，不能据历史回执宣称当前产物、目标或群体仍未变化。
 
 早期缺少上述完整性绑定的旧回执、旧交付计划及不一致记录明确拒绝；不会自动补字段、重算 ID 沿用旧批准或删除账本。保留旧记录，由宿主核对真实状态后在明确授权下重新规划/迁移。需要新动作的计划须重新取得精确批准；已有合法 v2 尝试的恢复查询与幂等性保留。检查适用性与预算报告见下文。新增可选[单文件内容绑定](../../docs/artifact-content.md)：受信政策可要求新动作核验实际 SHA-256/长度；来源与构建配置关联仍是宿主声明，不是构建认证。内容计划使用 merge-proposal/v2 和 delivery-proposal/v3，旧标签/合法已尝试操作保持原样可查询，不自动升级或重计预算。
 
@@ -123,7 +124,7 @@ python3 -B interfaces/lifecycle/cli.py --host-root HOST --policy-sha SHA --input
 
 交付参数：deploy/rollback={artifact}；promote={artifact,channel}；flag-set={enabled,cohort}；pause={}；forward-fix={finding_ids,handoff_ref}。模拟 provider 只能读写 host-root/sim-provider.json，不接生产。整个 delivery 及各 capabilities 分别 opt-in；required 不允许禁用。整个模块未启用返回 NOT_RUN/HOLD，不是线上验收。
 
-observe 从 input-root 读 `observation/v1`：artifact/target/cohort/config/window_start/window_end/source/query/samples/value/complete/observed_at。政策 observation 明确 duration_seconds/min_samples/max_value/max_age_seconds/source/query，窗口锚定当前 provider effective_at 到该时间加 duration_seconds；不能使用早于配置生效的窗口。来源、样本和有限阈值须匹配；不足、错误目标、过期、NaN 不通过。不无限等待；到窗结束仍不足交 owner/重规划。delivery-status 只解释模拟结果；不出具线上健康保证。
+observe 从 input-root 读 `observation/v1`：artifact/target/cohort/config/window_start/window_end/source/query/samples/value/complete/observed_at。政策 observation 明确 duration_seconds/min_samples/max_value/max_age_seconds/source/query，窗口锚定当前 provider effective_at 到该时间加 duration_seconds；不能使用早于配置生效的窗口。来源、样本和有限阈值须匹配；不足、错误目标、过期、NaN 不通过。不无限等待；到窗结束仍不足交 owner/重规划。默认 delivery-status 解释模拟结果；选定宿主 provider 时仅解释其受支持操作的回执与当前状态一致性，其他必需能力保持 UNKNOWN；均不出具线上健康保证。
 
 ## 验证与分发
 
@@ -141,3 +142,7 @@ python3 -O -B validation/lifecycle/test_lifecycle.py
 ## 可选构建来源核验
 
 [构建来源契约](../../docs/build-provenance.md)在内容摘要与宿主声明之外，提供由受信 Python 宿主注入、政策选择的核验器接口。默认 CLI 不加载核验器；必需能力缺失返回 UNKNOWN/HOLD。带核验结果的计划使用 merge-proposal/v4、delivery-proposal/v4，绑定精确来源、组合树、配置、产物、run 和动作意图；新执行重核，旧合法尝试只查历史、不重收费或重执行。未内置真实签名/CI 身份认证，合成交付 provider 保持模拟。
+
+## 可选受信宿主交付接口
+
+[宿主交付契约](../../docs/host-delivery.md)通过 `Session(..., delivery_providers={id: provider})` 接收受信应用对象，由固定政策选择版本和目标。首版只支持 deploy/rollback，新动作必须具备实际内容证明、精确批准及 provider 条件更新/持久幂等能力；默认 CLI 不注入任何对象。使用独立 host-delivery 计划/请求/结果版本，不将旧模拟记录升级为真实交付。已有尝试只查结果，不重发或重复计费；未知结果阻断同目标新意图。接口测试使用合成 provider，不代表生产服务已接入。
