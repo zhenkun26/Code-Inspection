@@ -40,3 +40,9 @@ Sources: [NtCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/wint
 Source collector references: [directory records](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_both_dir_info), [handle queries](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getfileinformationbyhandleex), [stream records](https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_stream_info), [Git filemode](https://git-scm.com/docs/git-config#Documentation/git-config.txt-corefileMode). These specify APIs, not validation of this implementation.
 
 The optional managed temporary write/recovery capability is currently POSIX-only and refuses Windows before managed mutation. Existing Windows save and metadata-only temp-report remain available; native managed deletion requires a separate identity-bound handle backend and native validation. See [temporary-state boundaries](temporary-state.md).
+
+## Managed temporary qualification experiment
+
+[The isolated qualification experiment](windows-temporary-qualification.md) records native API observations only. Windows managed cleanup remains unsupported; successful probe execution is not durability or production acceptance.
+
+[隔离资格实验](windows-temporary-qualification.md)仅记录原生 API 观察；Windows 受控清理仍不支持，实验运行成功不等于持久化或生产验收。

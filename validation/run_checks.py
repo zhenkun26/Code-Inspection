@@ -23,7 +23,7 @@ TESTS = ['security-integration/test_interface.py', 'security-integration/test_he
          'lifecycle/test_source_content.py', 'test_source_manifests.py',
          'test_bounded_process.py', 'test_windows_manifests.py',
          'lifecycle/test_demo.py', 'test_hygiene.py', 'test_native_files.py', 'test_codex_layout.py',
-         'test_check_runner.py']
+         'test_check_runner.py', 'test_windows_temporary_qualification.py']
 
 
 def lifecycle_shards(source):
