@@ -76,6 +76,8 @@ python3 -B validation/mutation_check.py
 
 附带的 [CI定义](.github/workflows/ci.yml) 配置了main推送、PR及手动触发，矩阵为Ubuntu24.04的Python3.9和3.13，加Windows2025x64的Python3.13。每项检查普通与优化模式，含两种完整示范、结构、安全边界、链接及精确摘要覆盖；Python3.13另跑固定保护条件移除检查。工作流仅有仓库只读权限，官方Actions固定SHA，无仓库秘密或部署步骤。请到 [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) 核对精确版本，其他仓库的历史运行不能转作当前证据；CI绿色不等于生产验收；其他runner组合不在该矩阵；Windows支持以原生安全用例完成为条件，不改系统权限或静默跳过。主动修改文件后，更新覆盖全部选定文件（除自身）的 `SHA256SUMS`。
 
+CI 总时限为 Ubuntu 15 分钟、Windows 50 分钟，依据实际阶段耗时设置；单条维护检查和单个变异测试子进程仍分别限时 180 秒与 90 秒。详见 [Windows CI 时间预算依据](docs/windows-support.md)。
+
 宿主保护政策、权限和账本目录；被审内容及日志不能扩权。JSON人名及摘要不是认证或沙箱。必需证据缺失、过时或不完整时保留缺口；READY_FOR_NEXT不授予合并或发布权限。见 [共享核心契约](skills/pre-pr-review/references/contract.md)。
 
 存储的合并/交付计划与回执在执行或恢复前核对精确意图、实际对象和状态关系。不安全的旧记录需要明确重新规划或迁移，见 [完整性与恢复兼容性](interfaces/lifecycle/README.md#计划完整性与恢复兼容性)。这些检查不能防御同时控制受信政策和批准存储的恶意写入者。
