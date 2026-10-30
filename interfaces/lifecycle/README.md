@@ -146,3 +146,5 @@ python3 -O -B validation/lifecycle/test_lifecycle.py
 ## 可选受信宿主交付接口
 
 [宿主交付契约](../../docs/host-delivery.md)通过 `Session(..., delivery_providers={id: provider})` 接收受信应用对象，由固定政策选择版本和目标。首版只支持 deploy/rollback，新动作必须具备实际内容证明、精确批准及 provider 条件更新/持久幂等能力；默认 CLI 不注入任何对象。使用独立 host-delivery 计划/请求/结果版本，不将旧模拟记录升级为真实交付。已有尝试只查结果，不重发或重复计费；未知结果阻断同目标新意图。接口测试使用合成 provider，不代表生产服务已接入。
+
+可选 `Session(..., temporary_namespace=...)` 只接受可信宿主创建且与根/政策匹配的受控临时命名空间。它登记新暂存资源；恢复需要单独的精确记录授权，不是业务恢复或全目录清理。当前仅 POSIX 且依赖排他协作命名空间，Windows 保守拒绝；默认行为不变。使用与信任边界见[临时状态文档](../../docs/temporary-state.md)。
