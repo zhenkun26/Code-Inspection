@@ -57,7 +57,7 @@ It retains a new external directory with commands and evidence. The tiny content
 - [Support and acceptance evidence](docs/acceptance.md)
 - [Sources and license scope](docs/sources.md)
 
-An explicit [temporary-state inspection](docs/temporary-state.md) reports crash residues under the host lock, without reading their contents or deleting them. It is a recovery aid, not automatic cleanup or evidence that a pending action succeeded.
+An explicit [temporary-state inspection](docs/temporary-state.md) reports crash residues under the host lock, without reading their contents or deleting them. It is a recovery aid, not evidence that a pending action succeeded. An opt-in trusted-host POSIX interface can recover exactly registered new resources under an exclusive cooperating-writer namespace; default inspection and unknown legacy files never authorize deletion. Windows managed cleanup is not supported.
 
 ## Requirements and checks
 

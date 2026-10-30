@@ -57,7 +57,7 @@ python3 -B examples/lifecycle_demo.py --simulate-approvals --with-delivery
 - [支持与验收证据](docs/acceptance.md)
 - [来源与许可范围](docs/sources.md)
 
-显式的[临时状态检查](docs/temporary-state.md)在宿主锁内报告强制终止留下的残留，不读取其内容，也不删除文件。这是恢复辅助信息，不是自动清理或待定动作成功的证据。
+显式的[临时状态检查](docs/temporary-state.md)在宿主锁内报告强制终止留下的残留，不读取其内容，也不删除文件。这是恢复辅助信息，不是待定动作成功的证据。可选可信宿主 POSIX 接口仅在所有写入者协作的排他命名空间内恢复明确登记的新资源；默认报告和未知历史文件不授权删除。Windows 受控清理尚不支持。
 
 ## 前提与检查
 

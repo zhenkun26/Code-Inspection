@@ -34,9 +34,13 @@ def subject(value):
     for v in value.values(): text(v)
     return value
 
-def load(root, name): return decode_json(read_bytes(root, name))
+def load(root, name):
+    from interfaces.lifecycle.owned_temporary import ManagedRoot
+    return decode_json(root.read(name) if type(root) is ManagedRoot else read_bytes(root, name))
 
 def save(root, name, value):
+    from interfaces.lifecycle.owned_temporary import ManagedRoot
+    if type(root) is ManagedRoot: return root.save(name, value)
     require(isinstance(name,str) and bool(name) and not any(x in name for x in '/\\:') and name not in {'.', '..'}, 'flat state name required')
     if os.name == 'nt':
         from support.windows_files import component
@@ -61,7 +65,8 @@ def save(root, name, value):
             raise
 
 class Session:
-    def __init__(self, host_root, policy_sha, metrics=None, *, verifiers=None, delivery_providers=None):
+    def __init__(self, host_root, policy_sha, metrics=None, *, verifiers=None, delivery_providers=None,
+                 temporary_namespace=None):
         self.metrics = metrics
         # Only trusted host Python code can supply capabilities; records cannot.
         require(verifiers is None or (type(verifiers) is dict and all(
@@ -78,6 +83,11 @@ class Session:
         self.current_attempt = None
         self._persistence_failed = False
         self.root = checked_root(host_root)
+        from interfaces.lifecycle.owned_temporary import ManagedTemporaryNamespace
+        require(temporary_namespace is None or (type(temporary_namespace) is ManagedTemporaryNamespace
+                and temporary_namespace.matches(host_root, policy_sha)),
+                'matching trusted temporary namespace required')
+        self.temporary_namespace = temporary_namespace
         raw = read_bytes(self.root, 'policy.json')
         require(hashlib.sha256(raw).hexdigest() == policy_sha, 'host policy pin mismatch')
         self.pin = policy_sha
@@ -115,10 +125,12 @@ class Session:
         self.accounting_trusted = False
         self.accounting_durability = 'unknown'
         self.current_attempt = None
-        with root_lock(original) as selected:
+        context = self.temporary_namespace.locked() if self.temporary_namespace is not None else root_lock(original)
+        with context as selected:
             self.root = selected
             try:
-                require(hashlib.sha256(read_bytes(selected,'policy.json')).hexdigest()==self.pin, 'host policy pin mismatch')
+                raw = selected.read('policy.json') if self.temporary_namespace is not None else read_bytes(selected,'policy.json')
+                require(hashlib.sha256(raw).hexdigest()==self.pin, 'host policy pin mismatch')
                 try: state=load(selected,'state.json')
                 except FileNotFoundError: state=None
                 self.state=state
@@ -134,6 +146,11 @@ class Session:
     def require_usable(self):
         require(not self._persistence_failed,
                 'HOLD: session persistence failed; successful locked reload required before reuse')
+        if self.temporary_namespace is not None:
+            from interfaces.lifecycle.owned_temporary import ManagedRoot
+            require(type(self.root) is ManagedRoot and self.root._active
+                    and self.root._namespace is self.temporary_namespace and self.temporary_namespace._busy,
+                    'HOLD: managed session requires active matching locked context')
 
     def event(self, action, detail):
         self.require_usable()
