@@ -45,4 +45,4 @@ The optional managed temporary write/recovery capability is currently POSIX-only
 
 [The isolated qualification experiment](windows-temporary-qualification.md) records native API observations only. Windows managed cleanup remains unsupported; successful probe execution is not durability or production acceptance.
 
-[隔离资格实验](windows-temporary-qualification.md)仅记录原生 API 观察；Windows 受控清理仍不支持，实验运行成功不等于持久化或生产验收。
+The [isolated qualification experiment](windows-temporary-qualification.md) records native API observations only. Windows managed cleanup remains unsupported; a successful experiment does not establish durability or production acceptance.

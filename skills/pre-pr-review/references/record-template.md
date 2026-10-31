@@ -1,41 +1,41 @@
-# 任务与结果记录模板
+# Task and Result Record Template
 
-按实际任务填入以下字段；这是字段模板，不是已批准配置。未知写明原因，不用空值假装不适用；不把尚未执行的预期复制到实际。可用 Markdown 表格或结构化数据承载，无需数据库。状态及门禁只在 [核心契约](contract.md) 定义。
+Fill in the following fields for the actual task; this is a field template, not approved configuration. Explain unknowns rather than using empty values to imply inapplicability; do not copy unexecuted expectations into actual results. Markdown tables or structured data may be used; no database is required. Statuses and gates are defined only in the [core contract](contract.md).
 
-## 任务、计划与分派
+## Task, Plan, and Assignments
 
-- task_id / scope / stage=pre_pr；需求原文位置、验收项、非目标。
-- identity：base、head/等价快照、工作区内容摘要/清单、策略、产物/环境/数据状态；获取方法及可复查引用。
-- authorization：来源、review/verify/repair 及允许动作/路径/环境、失效条件。
-- requirements：ID、风险、必需或建议及依据、对应检查/旅程/视角、判据、缺口、依赖、责任人。
-- assignments：ID、范围/问题、事实包引用、判据、证据要求、非目标、允许验证、返回形式；协调者管理数量/模型与共享预算，不允许递归分派。
-- budget：采用的轮次上限及依据、其他已确认限额或未知、计量单位与范围、外层调用及批内子项、已用次数/资源、停止原因。
+- task_id / scope / stage=pre_pr; location of original requirement wording, acceptance items, and non-goals.
+- identity: base, head/equivalent snapshot, workspace content digests/manifest, policy, artifact/environment/data state; acquisition method and references that can be checked again.
+- authorization: source, review/verify/repair and permitted actions/paths/environments, and conditions that invalidate it.
+- requirements: ID, risk, required or suggested and why, corresponding checks/journeys/perspectives, criteria, gaps, dependencies, and responsible person.
+- assignments: ID, scope/question, fact-package references, criteria, evidence requirements, non-goals, permitted verification, and return format; the coordinator manages headcount/models and the shared budget, with no recursive delegation.
+- budget: adopted round limit and basis, other confirmed limits or unknowns, measurement unit and scope, outer calls and batch subitems, calls/resources used, and stopping reason.
 
-## 每项证据
+## Each Evidence Item
 
 `id / requirement / subject / artifact / environment / data_state / specification / tool_or_model_version / config / time / steps / expected / actual / raw_status / status / output_refs / coverage / limitations / freshness`
 
-原始输出放受控位置，记录路径与必要摘要；证据从其他人提供时注明来源及是否亲自复核。历史证据保留，失效记录关联到新版本，不能覆盖成永远通过。
+Keep raw output in a controlled location and record its path and necessary summary; for evidence supplied by others, state the source and whether it was personally checked. Retain historical evidence and link invalidation records to new versions; do not overwrite it into a permanent pass.
 
-## 每项发现与处置
+## Each Finding and Disposition
 
 `id / subject / location / trigger / impact / severity_reason / confidence_basis / evidence_or_reproduction / confirmed_or_question / introduced_or_pre_existing_or_uncertain / blocking_reason / proposed_recheck / disposition / rebuttals / original_view_reports`
 
-原始分视角报告与归并记录同时可追溯；零发现也列实际覆盖和未读/未验证部分。无法解开的关键异议注明责任人与待补事实，不靠票数消除。
+Keep both original reports by review perspective and consolidation records traceable; even with zero findings, list actual coverage and unread/unverified portions. For unresolved key objections, state the responsible person and missing facts; votes do not eliminate them.
 
-## 最终给用户的报告
+## Final Report to the User
 
-1. **对象与授权**：审查哪个版本、哪些路径/需求，执行了哪些模式。
-2. **实际验证与审查**：检查 ID、状态、证据引用、覆盖/局限；运行与独立上下文情况如实注明。
-3. **发现和反证**：统一 ID、确认/疑点、影响、处置及分歧；修复和复验证据，新旧版本关系。
-4. **未完成**：关键配置、检查、环境或领域缺口，预算/停止原因和责任人。
-5. **阶段建议**：READY_FOR_NEXT/HOLD/REPLAN 及依据；下一步需要什么，不暗示已创建 PR、合并或发布。
+1. **Subject and authorization**: the reviewed version, paths/requirements, and modes executed.
+2. **Actual validation and review**: check IDs, statuses, evidence references, and coverage/limitations; truthfully describe execution and independent-context use.
+3. **Findings and rebuttals**: unified IDs, confirmed facts/questions, impact, dispositions, and disagreements; repair and recheck evidence, and the relationship between old and new versions.
+4. **Incomplete work**: key configuration, check, environment, or domain gaps; budget/stopping reason and responsible person.
+5. **Stage recommendation**: READY_FOR_NEXT/HOLD/REPLAN and its basis; what is needed next, without implying a PR was created, merged, or released.
 
-报告必须能被用户独立理解；小任务可以精简呈现，不能隐去阻断、未知或真实失败。该模板不是固定角色表或命令集合。
+The report must be understandable to the user on its own; small tasks may use a concise presentation, but must not hide blockers, unknowns, or actual failures. This template is not a fixed roster of roles or a command set.
 
-## 安全与跨阶段交接补充
+## Security and Cross-Stage Handoff Additions
 
-- policy_binding：用户/宿主指定者、来源路径、内容摘要、指定时间、适用范围；与被审规则的差异及独立批准记录。
-- data_boundary：可读/可写路径、测试数据、允许网络与模型接收方、进入模型前筛选能力、脱敏和未覆盖边界。
-- budget_ledger：统一任务 ID、阶段、轮次定义、累计轮次与调用/时间/费用（已配置者）、本阶段消耗、剩余额度及停止原因；进入下一阶段不清零。跨阶段如何分配仍待项目策略确定。
-- handoff：需求/身份/产物/策略、有效与失效证据及原因、正式发现和异议、尚缺能力/真人决策、下一阶段适用要求。交接不授予 PR 评论、合并或发布权限。
+- policy_binding: user/host designator, source path, content digest, designation time, and applicability; differences from reviewed rules and independent approval records.
+- data_boundary: readable/writable paths, test data, permitted network and model recipients, filtering capabilities before model entry, redaction, and uncovered boundaries.
+- budget_ledger: shared task ID, stage, round definition, cumulative rounds and calls/time/cost (where configured), consumption at this stage, remaining allowance, and stopping reason; entering the next stage does not reset it. Cross-stage allocation remains for project policy to determine.
+- handoff: requirements/identity/artifacts/policy, valid and invalidated evidence with reasons, formal findings and objections, missing capabilities/human decisions, and applicable requirements for the next stage. Handoff grants no permission for PR comments, merging, or release.

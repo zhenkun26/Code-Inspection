@@ -1,6 +1,5 @@
-# Source manifests / 源输入清单
+# Source manifests
 
-## English
 
 This optional local capability records actual scoped source inputs. It does not authenticate a build, collect an entire machine, deploy a directory, or prove that a test/build consumed these inputs. Keep the existing [evidence, authority and recovery contract](../interfaces/lifecycle/README.md); the manifest supplies a stronger source identity, not a second approval system.
 
@@ -60,7 +59,7 @@ Historical plan validation is pure with respect to source files. A valid already
 
 ### Supported boundary
 
-POSIX uses descriptor-relative no-follow traversal. Windows supports CPython 3.13 on Windows Server 2025 x64 with a local fixed NTFS volume and Git for Windows, within [the native boundary](windows-support.md). Directory enumeration and leaf reads use held native handles; selected file handles remain open with read-only sharing through capture, blocking ordinary write/delete opens; unsupported namespaces/filesystems and unavailable safety operations fail closed. Native tests must actually collect directory and HEAD/index/worktree inputs; skipped POSIX-specific cases are not native collection evidence.
+POSIX uses descriptor-relative no-follow traversal. Windows supports CPython 3.13 on Windows Server 2025 x64 with a local fixed NTFS volume and Git for Windows, within [the native boundary](windows-support.md). Directory enumeration and leaf reads use held native handles; selected file handles remain open with read-only sharing through capture, blocking ordinary write/delete opens. Attribute-only writes and malicious host control are outside that sharing guarantee; unsupported namespaces/filesystems and unavailable safety operations fail closed. Native tests must actually collect directory and HEAD/index/worktree inputs; skipped POSIX-specific cases are not native collection evidence.
 
 Stored `posix-permissions/v1` proofs keep their original semantics. New Windows proofs use `windows-readonly/v1`: mode `0` or `1` records absence/presence of FILE_ATTRIBUTE_READONLY for files and directories. This is not an ACL, effective-write-access or executable-bit assertion. HEAD/index retain Git modes `100644`/`100755`; an index-only executable change changes identity without fabricating a working-file executable bit. Changing read-only attributes also changes full identity. The validator is platform-independent and never rewrites a historical mode model or upgrades an approval. Windows Git capture requires explicit `core.filemode=false`; a missing/true setting is unsupported. Raw working bytes, including CRLF, are compared as bytes: no implicit line-ending normalization makes a changed checkout look committed.
 
@@ -69,25 +68,3 @@ Supported paths have strict UTF-8 spelling and portable relative components. Ent
 Collection caps are 1,024 selected file/directory entries, 1 MiB per file/blob, 8 MiB aggregate logical bytes (all HEAD/index/worktree projections count), depth 32, 4,096 UTF-8 path bytes, 4,096 visited entries per enumeration, and a 1 MiB canonical manifest. Git commands have bounded stdout/stderr, a per-command deadline and a bounded capture group. Policy can lower the configurable file/count/byte caps. Errors, caps, observed concurrent changes and unsupported input produce no complete proof. Held descriptors, repeated observations and metadata checks detect observed races but do not prove a directory-wide atomic instant or defeat a malicious trusted writer. The result is scoped consistency under the declared host isolation, not a sandbox, hard memory quota or authenticated provenance.
 
 Directory **artifacts** are not accepted by the current single-file deployment consumer. See [artifact content](artifact-content.md) for its distinct identity and immutable-byte consumption. Do not replace an artifact digest with a source manifest and claim a deployment was verified.
-
-## 简体中文
-
-本接口补充有界、可复算的**源输入身份**，不是构建来源认证、全机采集、目录部署或“测试确实使用了这些输入”的证明。沿用既有五字段 subject、证据、预算、批准及恢复规则。
-
-`directory` 记录声明范围内的普通文件、目录（包括空目录）、平台声明的模式投影、长度和原始字节 SHA-256。`git-worktree` 分别记录 HEAD、stage-0 index 和实际工作文件；空侧表示新增/删除，重命名表示删除加新增。同一 HEAD 下，暂存、未暂存、删除、纳入范围的 untracked 和可执行模式变化都不再被 HEAD 掩盖。CRLF 原样保留，不运行 Git 内容过滤器。
-
-清单包含模式、范围、字面排除规则、限制、模式模型及确定性排序的条目，身份写入 `subject.worktree_digest` 的 `source-manifest-sha256:` 前缀。Git 模式还绑定完整 base/head 及 HEAD tree。绝对源路径、时间戳和 inode 不作为内容身份；源根由已固定摘要的宿主政策选择。完整仅针对声明范围：ignored 文件不能自动当作无关或安全，须明确排除或先解决覆盖缺口，不能偷偷读取其内容。排除参与构建/检查的输入必须如实说明；`.git` 不是源 payload。清单文件名本身也可能敏感，不默认公开。
-
-上述 `source_content` JSON 只是配置示例。宿主选择根、scope、exclusions、上限和 required，并保护路径父级、Git 可执行程序和元数据对象存储。优先使用受控冻结副本；账本锁不冻结源树，也不能凭字符串声明证明隔离。scope/exclusions 是按 UTF-8 字节排序且不重复的字面相对路径前缀，不执行任意命令或 glob。directory 模式在枚举前拒绝根及父级路径的 .git 目录、文件或链接，防止绕过 Git 忽略路径检查；非 Git 目录不存在隐式 Git 忽略语义，所需排除必须由宿主明确提供。
-
-捕获后，将精确 manifest 身份和 `source-content/v1` sidecar 一起用于初始化/advance；sidecar 关联当前 subject 摘要，不能产生循环摘要或自动补出批准。捕获不是审查轮次。后续新动作重新捕获；内容、index、模式、范围、排除或关联变化使旧证据不再适用，应显式 advance、按影响复验及重新批准。必需证明缺失、范围不支持、读取/稳定性失败为 UNKNOWN/HOLD；不是产品缺陷 FAIL，也不清零预算。未选择可选能力的旧流程保持，提供了证明就必须校验。
-
-以上 `source-capture` 命令可在 init 前运行。宿主先在可信根保存 `source-capture/v1` 请求及真实五字段 subject，命令只派生 worktree_digest，返回建议 subject 和 sidecar；其余字段仍为宿主声明。它不写账本/批准/政策、不开始轮次或收费，但同步锁可能被创建。PASS 仅指本次支持范围内的捕获完成，构建来源仍 UNKNOWN、动作授权仍 false。将输出的两项一起放入原有 handoff 或 subject-change，再执行 init/advance；输出必须在源范围之外，避免清单包含自身。示例的大写值是待替换的输入说明，不是可用默认身份。
-
-新的源绑定合并计划为 `merge-proposal/v3`，完整 sidecar 参与计划 ID。现有合并适配器只组合提交对象：目录模式或带暂存/未暂存/相关 untracked 字节或 Git 模式差异的源不能冒充待合并提交内容，须先解决不匹配；仍可进行本地脏工作树的只读审查。提交等价要求 HEAD/index 模式一致及选中文件字节一致；POSIX 还比较实际 owner-executable 位。Windows 明确要求 core.filemode=false，不从扩展名或只读属性推断可执行权限；空目录和其他 POSIX 权限位并不会因此进入 Git tree；这些属性仍参与完整源身份，变化使旧证据失效，相关行为应由集成检查核验。合法历史 pending/receipt 的查询和幂等恢复不重新读取当前源、不重复收费或执行；旧标签不自动升级，旧缺失绑定的回执也不因此放行。账本 1 MiB 上限不变，不能删历史容纳清单。
-
-POSIX 使用目录描述符/no-follow 遍历；Windows 支持范围为 Windows Server 2025 x64、CPython 3.13、Git for Windows、本地固定 NTFS 卷及[原生平台边界](windows-support.md)。枚举和读取使用持有的原生句柄；选中文件句柄以只读共享保留到采集结束，阻止普通写入/删除打开，并由同一叶句柄提供字节；属性类写入及恶意宿主控制不在共享保证内；不支持的命名空间/文件系统或安全能力不可用时拒绝。Windows 测试须真实采集目录和 HEAD/index/worktree，跳过 POSIX 专属测试不算 Windows 采集通过。
-
-旧 posix-permissions/v1 证明保持原语义。新 windows-readonly/v1 的 mode 为 0/1，表示文件/目录只读属性的缺席/存在，不代表 ACL、有效写权限或执行位。HEAD/index 保留 Git 的 100644/100755；仅改 index 执行位会改变身份，而不伪造工作文件执行位。只读属性变化也改变完整身份。纯校验不依赖当前平台，不改写旧证明或升级批准。Windows Git 采集要求明确 core.filemode=false；缺失或 true 为不支持。CRLF 等工作文件字节原样比较，不能借隐式换行转换把不同字节视作已提交。包含链接/reparse、硬链接、特殊类型、路径逃逸、歧义大小写/Unicode、非法编码、不支持的 index/submodule、linked worktree 或对象布局时拒绝。Git 模式还拒绝 LFS 指针，不能冒称已捕获外部对象；目录模式只描述字面文件字节，不解析 LFS 对象。枚举、文件/字节/深度/路径/输出及命令时间均有界，失败或截断不生成完整证明。没有网络、checkout、过滤器、hook 或 index 写入。
-
-重复观察和元数据检查不能证明跨文件原子快照，也不能抵御控制受信宿主的恶意写入者。目录产物与源目录不同：现有交付仍只消费受控的单文件快照，本清单不能替代其 artifact 身份或构建来源认证。实际限制与本批测试结果须按所运行平台分别阅读。

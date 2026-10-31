@@ -1,21 +1,21 @@
-# 实际使用验证
+# Actual-Use Validation
 
-从需求反推完整用户旅程及完成条件：起始状态、操作、预期、实际；按风险覆盖异常输入、刷新、重入、取消、失败恢复或持久化等适用分支。Web、原生、CLI/HTTP 可使用各自工具；不强制 Playwright 或某厂商模型。启动成功、端口打开、页面能访问只证明该项事实，不证明功能正确。
+Derive the complete user journey and completion criteria from requirements: starting state, actions, expected results, and actual results. Cover applicable branches such as invalid input, refresh, re-entry, cancellation, failure recovery, and persistence according to risk. Web, native, and CLI/HTTP validation may use their respective tools; neither Playwright nor any vendor's model is mandatory. Successful startup, an open port, or a reachable page proves only that fact, not functional correctness.
 
-先确认 verify 授权、受信命令、被测版本/构建、环境、账号、测试数据、网络与副作用边界。复用已有授权，不每次点击机械重问；验证不自动授权安装、秘密访问、真实付款、通知客户、生产数据操作或保存认证状态。遇到权限拒绝按核心契约停止，不换通道绕过。
+First confirm verify authorization, trusted commands, the version/build under test, environment, accounts, test data, network, and side-effect boundaries. Reuse existing authorization rather than mechanically asking again for every click; verification does not automatically authorize installation, secret access, real payments, customer notifications, production data operations, or saving authentication state. On a permission denial, stop according to the core contract rather than switching channels to bypass it.
 
-并行使用隔离实例/账号/数据；不能隔离时协调者串行安排，记录状态初始化及允许的清理。只清理本任务被授权生成的对象，不删除无关资料。启动 helper 的 shell/端口探测、浏览器 session 或“本地运行”都不证明完整隔离；识别目标进程/产物，记录能力限制。
+Use isolated instances/accounts/data for parallel work; when isolation is unavailable, the coordinator schedules serial execution and records state initialization and permitted cleanup. Clean up only objects this task was authorized to create, without deleting unrelated material. A shell/port probe that starts a helper, a browser session, or "running locally" does not prove complete isolation; identify the target process/artifact and record capability limitations.
 
-观察—操作—再观察，每步对应预期、实际和版本。优先条件等待，不用固定延时/networkidle 自动推断成功。截图/视频支持可见状态，日志/响应/持久化状态支持对应事实；证据类型由验收决定，截图不是永远最优。没有读取的图/页面/日志不能说已核验。
+Observe, act, then observe again, tying every step to expected results, actual results, and the version. Prefer condition-based waits; do not automatically infer success from fixed delays/networkidle. Screenshots/video support visible-state claims, while logs/responses/persisted state support their corresponding facts; acceptance criteria determine evidence types, and screenshots are not always best. Do not claim to have verified images/pages/logs that were not read.
 
-如果验收目标是 UI，API/WebMCP 路径不能替代 UI 证据；可另列其覆盖。真实集成不可用时替代验证注明差异，不能换 mock 后宣称集成已通过。自动化测试与真实交互互补，各自报告范围与缺口。
+If the acceptance target is the UI, API/WebMCP paths cannot replace UI evidence; their coverage may be listed separately. When a real integration is unavailable, state the differences in substitute validation; switching to a mock cannot establish that the integration passed. Automated tests and actual interaction complement one another; report the scope and gaps of each.
 
-测试框架提供断言和测试上下文，浏览器操作器只提供操作能力，不能自动成为正确性门禁。保留 trace 的来源和格式；Chrome Trace Event JSON 不等同 Playwright Test trace。输出引用必须可读，并标注裁剪/脱敏范围，秘密不进入模型上下文或公共报告；关键材料不足为 UNKNOWN。
+A test framework supplies assertions and test context; a browser operator supplies interaction capability only and does not automatically become a correctness gate. Preserve trace provenance and format; Chrome Trace Event JSON is not a Playwright Test trace. Output references must be readable and state the scope of truncation/redaction. Secrets must not enter model context or public reports; insufficient key material is UNKNOWN.
 
-测试生成/修复不能降低 expected/assertions、用 fixme/skip 跳过必需场景后宣布通过，或持续修到绿。判据改变需有权人员单独审阅。探索不设问题数量目标，不稳定发现保留为疑点与复现限制。
+Test generation/repair must not weaken expected/assertions, declare a pass after using fixme/skip to omit required scenarios, or keep repairing until green. Changes to criteria require separate review by an authorized person. Exploration has no issue-count target; retain unstable findings as questions with reproduction limitations.
 
-检查记录使用 [模板](record-template.md) 的证据字段。工具原始状态与解释后的 PASS/FAIL 等分开；阶段建议由协调者核对所有要求后给出。
+Use the evidence fields in the [template](record-template.md) for check records. Keep raw tool status separate from interpreted PASS/FAIL and other statuses; the coordinator provides the stage recommendation after checking all requirements.
 
-## 本项目辅助验证工具的执行范围
+## Execution Scope of This Project's Validation Helpers
 
-本项目的验证脚本使用 Python 3.9+ 标准库；生成 Git fixture 另需已安装 Git。路径安全读取要求宿主支持 dir_fd、O_NOFOLLOW 和 O_DIRECTORY，不支持时拒绝而非悄悄降级。它们不提供通用沙箱。辅助脚本只允许执行明确受信、由本项目生成且核对源码的自有 fixture；目标仓库或 PR 提供的任意脚本、hook、配置不得借此获得执行授权。每次子进程设必要超时，超时保留原始失败并报告 UNKNOWN/BLOCKED 的具体原因。
+This project's validation scripts use the Python 3.9+ standard library; generating Git fixtures also requires Git to be installed. Safe path reads require host support for dir_fd, O_NOFOLLOW, and O_DIRECTORY; reject unsupported hosts rather than silently degrading. These tools do not provide a general-purpose sandbox. Helper scripts may execute only the project's own fixtures that are explicitly trusted, generated by this project, and source-checked; arbitrary scripts, hooks, or configuration supplied by the target repository or PR must not gain execution authority through them. Set necessary timeouts for every subprocess; on timeout, preserve the original failure and report the specific reason for UNKNOWN/BLOCKED.

@@ -54,7 +54,7 @@ Budget: explicit task limits, inherited use, counting unit and stop/escalation o
 Output: actual version, evidence, confirmed findings/questions, gaps and stage recommendation.
 ```
 
-For optional B execution, the generated `fixture/host/policy.json` is a complete **valid minimal teaching policy** for this runner. It has the required CI/semantic/security PR checks and a combination check. Inspect it alongside [the authoritative field contract](../interfaces/lifecycle/README.md#最小配置与记录), then construct a separate host-owned policy for the real task. Do not treat fixture budget, reviewer count, check names, `low_auto`, humans, scopes or delivery thresholds as approved project defaults. The current merge backend accepts only the marked isolated bare repository; editing a path is not production integration.
+For optional B execution, the generated `fixture/host/policy.json` is a complete **valid minimal teaching policy** for this runner. It has the required CI/semantic/security PR checks and a combination check. Inspect it alongside [the authoritative field contract](../interfaces/lifecycle/README.md#minimal-configuration-and-records), then construct a separate host-owned policy for the real task. Do not treat fixture budget, reviewer count, check names, `low_auto`, humans, scopes or delivery thresholds as approved project defaults. The current merge backend accepts only the marked isolated bare repository; editing a path is not production integration.
 
 | Field group | Trusted source and responsibility |
 | --- | --- |
