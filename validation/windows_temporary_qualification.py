@@ -135,7 +135,7 @@ def parse_report(raw):
     if report['complete']:
         for observation in report['observations']:
             label = observation['label']
-            native = (label.startswith('flush_') or label in {'directory_write_open', 'create', 'absence'}
+            native = (label.startswith('flush_') or label in {'directory_write_open', 'create', 'rename', 'absence'}
                       or label.endswith(('_create', '_hold', '_blocked_open', '_retry_open', '_absence')))
             expected = ('0xc0000043' if label.endswith('_blocked_open') else
                         '0xc0000034' if label == 'absence' or label.endswith('_absence') else None)
@@ -224,6 +224,9 @@ class NativeExperiment:
                               win.ULONG, ctypes.c_void_p, win.ULONG, ctypes.POINTER(win.IoStatus))
         self.set_info = win.bind(win.K, 'SetFileInformationByHandle', win.w.BOOL,
                                  win.HANDLE, ctypes.c_int, ctypes.c_void_p, win.ULONG)
+        self.nt_set_info = win.bind(win.N, 'NtSetInformationFile', win.NTSTATUS,
+                                    win.HANDLE, ctypes.POINTER(win.IoStatus), ctypes.c_void_p,
+                                    win.ULONG, ctypes.c_int)
         self.write = win.bind(win.K, 'WriteFile', win.w.BOOL, win.HANDLE, ctypes.c_void_p,
                               win.ULONG, ctypes.POINTER(win.ULONG), ctypes.c_void_p)
 
@@ -350,10 +353,12 @@ class NativeExperiment:
         self.phase = 'rename'
         raw = rename_buffer(root.handle, 'renamed-payload')
         rename = ctypes.create_string_buffer(raw, len(raw))
-        ok = self.set_info(payload, 3, rename, len(raw))
-        self.record('rename', 'OBSERVED' if ok else 'ERROR',
-                    **({} if ok else {'winerror': ctypes.get_last_error()}))
-        if not ok:
+        # Native FileRenameInformation=10 is distinct from Win32 FileRenameInfo=3.
+        # One attempt, preserving both pinned handles; never fall back to a path.
+        io = self.io()
+        result = self.nt_set_info(payload, ctypes.byref(io), rename, len(raw), 10)
+        self.nt_record('rename', result, io)
+        if result != 0 or not self.io_completed(io):
             raise ProbeFailure()
         self.flush_directories(root.handle, writable, 'after_rename')
         self.disposition(payload, 'disposition', payload_identity); self.close(payload, 'close_payload')

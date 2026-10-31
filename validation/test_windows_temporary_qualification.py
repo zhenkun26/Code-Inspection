@@ -26,7 +26,7 @@ def protocol_fixture():
     observations = []
     for label in q.EXPECTED_LABELS:
         value = dict(label=label, status='OBSERVED')
-        native = (label.startswith('flush_') or label in {'directory_write_open', 'create', 'absence'}
+        native = (label.startswith('flush_') or label in {'directory_write_open', 'create', 'rename', 'absence'}
                   or label.endswith(('_create', '_hold', '_blocked_open', '_retry_open', '_absence')))
         if native:
             negative = ('0xc0000043' if label.endswith('_blocked_open') else
@@ -132,6 +132,10 @@ class QualificationProtocol(unittest.TestCase):
         for label, field, value in (
                 ('directory_write_open', 'ntstatus', '0xc0000022'),
                 ('directory_write_open', 'iosb_information', None),
+                ('rename', 'ntstatus', '0x00000103'),
+                ('rename', 'iosb_status', '0xc0000022'),
+                ('rename', 'iosb_written', False),
+                ('rename', 'iosb_information', None),
                 ('reader_blocked_open', 'ntstatus', '0xc0000001'),
                 ('writer_absence', 'ntstatus', '0x00000000'),
                 ('no_delete_disposition', 'winerror', 32),
@@ -281,6 +285,75 @@ class QualificationProtocol(unittest.TestCase):
         with self.assertRaises(q.ProbeFailure):
             experiment.disposition(object(), 'reader_retry_disposition', b'created identity')
         experiment.set_info.assert_not_called()
+
+    def test_completed_report_requires_native_rename_completion(self):
+        report = protocol_fixture()
+        observation = next(o for o in report['observations'] if o['label'] == 'rename')
+        observation.clear(); observation.update(label='rename', status='OBSERVED')
+        with self.assertRaises(ValueError):
+            q.parse_report(encode(report))
+
+    def rename_control(self, result=0, status=None, information=0):
+        """Call-routing control only; no native operation or acceptance evidence."""
+        class IoStatus(ctypes.Structure):
+            _fields_ = [('StatusOrPointer', ctypes.c_void_p), ('Information', ctypes.c_size_t)]
+        class AfterRename(Exception):
+            pass
+        root = SimpleNamespace(handle=ctypes.c_void_p(0x1234),
+                               handles=[object(), object()], names=['fixture'])
+        source = ctypes.c_void_p(0x5678)
+        experiment = q.NativeExperiment.__new__(q.NativeExperiment)
+        experiment.observations = []
+        experiment.w = SimpleNamespace(DIR_ACCESS=1, FILE_READ=1, ULONG=ctypes.c_uint32,
+                                       IoStatus=IoStatus, wincheck=lambda value: None)
+        experiment.opened = Mock(side_effect=[object(), source])
+        experiment.identity = Mock(return_value=b'fixed identity')
+        def flush(read, write, phase):
+            if phase == 'after_rename':
+                raise AfterRename()
+        experiment.flush_directories = Mock(side_effect=flush)
+        def write(handle, data, size, count, overlapped):
+            count._obj.value = size
+            return True
+        experiment.write = write
+        experiment.set_info = Mock(return_value=True)
+        def native(handle, iosb, buffer, size, kind):
+            iosb._obj.StatusOrPointer = status
+            iosb._obj.Information = information
+            return result
+        experiment.nt_set_info = Mock(side_effect=native)
+        try:
+            experiment.run(root)
+        except (AfterRename, q.ProbeFailure) as error:
+            caught = error
+        else:
+            self.fail('control must stop before any later fixture operation')
+        return experiment, root, source, caught, AfterRename
+
+    def test_rename_uses_native_class_and_same_handles_once(self):
+        experiment, root, source, caught, after = self.rename_control()
+        self.assertIsInstance(caught, after)
+        experiment.nt_set_info.assert_called_once()
+        experiment.set_info.assert_not_called()
+        handle, iosb, buffer, size, kind = experiment.nt_set_info.call_args.args
+        self.assertIs(handle, source)
+        self.assertEqual(kind, 10)
+        self.assertEqual(ctypes.string_at(buffer, size), q.rename_buffer(root.handle, 'renamed-payload'))
+        self.assertEqual(size, ctypes.sizeof(buffer))
+        observed = next(o for o in experiment.observations if o['label'] == 'rename')
+        self.assertEqual(observed, dict(label='rename', status='OBSERVED', ntstatus='0x00000000',
+                         iosb_written=True, iosb_status='0x00000000', iosb_information=0))
+
+    def test_rename_pending_error_or_unwritten_iosb_stops_without_retry(self):
+        for result, status, information in ((0x103, None, 0), (-1073741811, None, 0),
+                                            (0, 0xffffffff, 0), (0, 0xc0000022, 0),
+                                            (0, None, ctypes.c_size_t(-1).value)):
+            with self.subTest(result=result, status=status, information=information):
+                experiment, root, source, caught, after = self.rename_control(result, status, information)
+                self.assertIsInstance(caught, q.ProbeFailure)
+                experiment.nt_set_info.assert_called_once()
+                experiment.set_info.assert_not_called()
+                self.assertNotIn('after_rename', [call.args[2] for call in experiment.flush_directories.call_args_list])
 
     def test_failed_close_is_not_retried(self):
         experiment = q.NativeExperiment.__new__(q.NativeExperiment)

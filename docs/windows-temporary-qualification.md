@@ -25,7 +25,7 @@ The result must always say the product capability is not enabled and native clea
 
 [Microsoft's handle-information API](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle) supports marking an already opened DELETE-capable handle for deletion. An accepted disposition is not itself proof of completed deletion: close and an exact absence observation are separate facts.
 
-The rename probe keeps the source handle and pinned relative root. Its x64 buffer includes the complete fixed structure and UTF-16 name, with byte length and a wide terminator inside the supplied allocation. Native failures remain failed observations; allocation tests are not evidence the Windows call succeeded.
+The rename probe keeps the source handle and pinned relative root. Its x64 buffer includes the complete fixed structure and UTF-16 name, with byte length and a wide terminator inside the supplied allocation. It makes one [NtSetInformationFile](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntsetinformationfile) call with native `FileRenameInformation=10`, requiring both a successful return and a written, successful IOSB. Pending, unwritten or failed completion stops the probe; there is no path-based or second-call fallback. The earlier Win32 invocation returned error 87 on the target runner even after its allocation was corrected. This does not establish universal Win32 relative-root incompatibility. Native failures remain failed observations; ABI/routing tests are not evidence the Windows call succeeded.
 
 [NtFlushBuffersFileEx](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntflushbuffersfileex) describes normal file data/metadata/cache flushing. Native directory-handle behavior and required access must be measured. Successful calls do not establish all ordering guarantees needed for child registration, rename and deletion across actual power loss. [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers) also describes an administrative volume-wide option; this experiment never uses it or requests extra privileges.
 
@@ -43,7 +43,7 @@ The worker has a 55-second watchdog; the parent applies a 60-second direct-worke
 
 实验区分 API 调用返回值、同句柄删除/关闭/路径缺失的可观察事实，以及仍然 UNKNOWN 的目录项和掉电持久性。即使调用成功，输出也必须保留“未资格通过、产品未启用”；完成观测不等于生产验收或审批。超时、畸形结果、非预期失败保持未完成/未知，不重试删除，也不由父进程清扫超时工作进程的目录。
 
-重命名保持源句柄和固定的相对根；x64 缓冲区包含完整结构及 UTF-16 名称，字节长度和双字节终止符均在传入范围内。原生失败仍是失败观测；布局测试不能证明 Windows 调用成功。
+重命名保持源句柄和固定的相对根；x64 缓冲区包含完整结构及 UTF-16 名称，字节长度和双字节终止符均在传入范围内。仅调用一次 `NtSetInformationFile`，使用原生 `FileRenameInformation=10`，要求返回成功且 IOSB 确实写入成功结果。pending、未写入或失败都停止，不回退到路径操作或第二次调用。此前 Win32 调用在该 runner 上补足缓冲区后仍返回错误 87，不能据此宣称所有 Win32 相对根调用均不支持。原生失败仍是失败观测；布局和调用路由测试不能证明 Windows 调用成功。
 
 本分支在既有 Windows job 的维护检查及变异之后接入两条原生命令，各步骤另设两分钟工作流上限；失败仍使 job 失败，未取消时第二模式仍执行。配置存在不代表已运行，应查精确提交的实际日志；Mac 拒绝/模拟编排测试不能代替 Windows 原生运行。本实验也不是全套归属协议；所有崩溃点、重解析点/映射/ADS 威胁、重启/故障存储及四阶段联动仍需后续验收，POSIX 和旧 Windows 行为不变。
 
