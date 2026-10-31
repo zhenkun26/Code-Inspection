@@ -25,13 +25,15 @@ The result must always say the product capability is not enabled and native clea
 
 [Microsoft's handle-information API](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle) supports marking an already opened DELETE-capable handle for deletion. An accepted disposition is not itself proof of completed deletion: close and an exact absence observation are separate facts.
 
+The rename probe keeps the source handle and pinned relative root. Its x64 buffer includes the complete fixed structure and UTF-16 name, with byte length and a wide terminator inside the supplied allocation. Native failures remain failed observations; allocation tests are not evidence the Windows call succeeded.
+
 [NtFlushBuffersFileEx](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntflushbuffersfileex) describes normal file data/metadata/cache flushing. Native directory-handle behavior and required access must be measured. Successful calls do not establish all ordering guarantees needed for child registration, rename and deletion across actual power loss. [FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers) also describes an administrative volume-wide option; this experiment never uses it or requests extra privileges.
 
 This small probe is not a complete ownership/recovery implementation. It does not cover every crash point, reparse/mapping/ADS attack, reboot, faulty storage or lifecycle integration. Those remain required before any separate production enablement proposal. Existing POSIX recovery and legacy Windows behavior remain unchanged.
 
 ## Runtime and publication boundary
 
-The worker has a 55-second watchdog; the parent applies a 60-second direct-worker deadline plus the existing bounded cleanup attempt and bounded output. Native duration is unmeasured until executed; reserve roughly three minutes for both modes, including startup and cleanup allowance. Timeout cleanup can remain UNKNOWN. No process-tree/sandbox guarantee is added. The workflow reuses the existing Windows runner without adding a service or matrix, or changing existing job/check timeouts. Actual billed usage depends on the user's GitHub plan and run duration; this is not a zero-cost claim.
+The worker has a 55-second watchdog; the parent applies a 60-second direct-worker deadline plus the existing bounded cleanup attempt and bounded output. Read measured duration from the exact run; reserve roughly three minutes for both modes, including startup and cleanup allowance. Timeout cleanup can remain UNKNOWN. No process-tree/sandbox guarantee is added. The workflow reuses the existing Windows runner without adding a service or matrix, or changing existing job/check timeouts. Actual billed usage depends on the user's GitHub plan and run duration; this is not a zero-cost claim.
 
 ## 简体中文
 
@@ -41,6 +43,8 @@ The worker has a 55-second watchdog; the parent applies a 60-second direct-worke
 
 实验区分 API 调用返回值、同句柄删除/关闭/路径缺失的可观察事实，以及仍然 UNKNOWN 的目录项和掉电持久性。即使调用成功，输出也必须保留“未资格通过、产品未启用”；完成观测不等于生产验收或审批。超时、畸形结果、非预期失败保持未完成/未知，不重试删除，也不由父进程清扫超时工作进程的目录。
 
+重命名保持源句柄和固定的相对根；x64 缓冲区包含完整结构及 UTF-16 名称，字节长度和双字节终止符均在传入范围内。原生失败仍是失败观测；布局测试不能证明 Windows 调用成功。
+
 本分支在既有 Windows job 的维护检查及变异之后接入两条原生命令，各步骤另设两分钟工作流上限；失败仍使 job 失败，未取消时第二模式仍执行。配置存在不代表已运行，应查精确提交的实际日志；Mac 拒绝/模拟编排测试不能代替 Windows 原生运行。本实验也不是全套归属协议；所有崩溃点、重解析点/映射/ADS 威胁、重启/故障存储及四阶段联动仍需后续验收，POSIX 和旧 Windows 行为不变。
 
-工作进程有 55 秒看门狗，父进程另设 60 秒上限，并有既有有界清理尝试和输出上限；两模式可预留约三分钟，实际原生时长仍未测量，超时后的清理也可能 UNKNOWN。工作流复用现有 Windows runner，不新增服务/矩阵，不调整既有 job 或检查时限；实际费用取决于账户计划与用时，不能称免费。
+工作进程有 55 秒看门狗，父进程另设 60 秒上限，并有既有有界清理尝试和输出上限；两模式可预留约三分钟，实际原生时长以精确运行日志为准，超时后的清理也可能 UNKNOWN。工作流复用现有 Windows runner，不新增服务/矩阵，不调整既有 job 或检查时限；实际费用取决于账户计划与用时，不能称免费。

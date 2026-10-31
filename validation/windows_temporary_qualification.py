@@ -178,7 +178,10 @@ def worker_command(optimize):
 def rename_buffer(parent, name):
     raw = name.encode('utf-16-le')
     value = parent.value if hasattr(parent, 'value') else parent
-    return struct.pack('<I4xQI', 0, value, len(raw)) + raw
+    # x64 FILE_RENAME_INFO is 24 bytes, with FileName starting at offset20.
+    # Allocate sizeof(struct)+name bytes, retaining WCHAR[1]/tail padding and
+    # a complete UTF-16 terminator inside the size supplied to the native API.
+    return struct.pack('<I4xQI', 0, value, len(raw)) + raw + b'\0' * 4
 
 
 def supervise():
@@ -346,7 +349,7 @@ class NativeExperiment:
         self.flush_directories(root.handle, writable, 'after_create')
         self.phase = 'rename'
         raw = rename_buffer(root.handle, 'renamed-payload')
-        rename = ctypes.create_string_buffer(raw)
+        rename = ctypes.create_string_buffer(raw, len(raw))
         ok = self.set_info(payload, 3, rename, len(raw))
         self.record('rename', 'OBSERVED' if ok else 'ERROR',
                     **({} if ok else {'winerror': ctypes.get_last_error()}))

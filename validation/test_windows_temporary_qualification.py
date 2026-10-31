@@ -250,7 +250,26 @@ class QualificationProtocol(unittest.TestCase):
             self.fail('rename helper must serialize the numeric ctypes HANDLE value')
         self.assertEqual(struct.unpack_from('<Q', buffer, 8)[0], 0x1234)
         self.assertEqual(struct.unpack_from('<I', buffer, 16)[0], len(raw))
-        self.assertEqual(buffer[20:], raw)
+        self.assertEqual(buffer[20:20+len(raw)], raw)
+
+    def test_rename_buffer_contains_full_structure_and_wide_terminator(self):
+        # Independent Windows ABI oracle: fixed-width WCHAR, not host c_wchar.
+        class RenameInfo64(ctypes.Structure):
+            _fields_ = [('flags', ctypes.c_uint32), ('root', ctypes.c_uint64),
+                        ('length', ctypes.c_uint32), ('name', ctypes.c_uint16 * 1)]
+        self.assertEqual(RenameInfo64.name.offset, 20)
+        self.assertEqual(ctypes.sizeof(RenameInfo64), 24)
+        for name in ['x', 'renamed-payload', '\u76ee\U0001f642']:
+            with self.subTest(name=name):
+                raw = name.encode('utf-16-le')
+                buffer = q.rename_buffer(ctypes.c_void_p(0x1234), name)
+                self.assertGreaterEqual(len(buffer), ctypes.sizeof(RenameInfo64) + len(raw))
+                self.assertEqual(buffer[20:20+len(raw)], raw)
+                self.assertEqual(buffer[20+len(raw):], b'\0' * (len(buffer)-20-len(raw)))
+                self.assertEqual(buffer[20+len(raw):22+len(raw)], b'\0\0')
+                self.assertEqual(struct.unpack_from('<I', buffer, 16)[0], len(raw))
+                self.assertEqual(struct.unpack_from('<Q', buffer, 8)[0], 0x1234)
+                self.assertEqual(struct.unpack_from('<I', buffer, 0)[0], 0)
 
     def test_retry_identity_mismatch_precedes_any_disposition(self):
         # Guard ordering only. This does not simulate successful native deletion.
