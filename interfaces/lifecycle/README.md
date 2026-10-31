@@ -47,6 +47,9 @@ CLI 成功结果和运行错误结果附加 `budget_report`（`lifecycle-budget-
 
 只有政策 pin、任务和已读账本绑定成立且计数有效才报告 known；缺失/非法历史计数不补零，显示 unknown/null。每次新记账前，operations 与 rounds 都必须是精确的非负整数；布尔值、负数、非整数或缺字段时拒绝并保留原账本，不通过算术把坏数据转换成正常计数。超过限额的合法整数保留实际 used，remaining 截为零。保存失败后，内存值仅标为 session_snapshot、durability=unknown，不宣称已经持久化；须先核查实际存储与回执，不凭容量重试。既有合法已尝试操作仍能在预算耗尽或计数未知时查询/幂等恢复，恢复不授予新动作。没有自动账本迁移或历史观察数据回填。
 
+兼容字段 `durability=persisted` 仅表示普通保存调用成功或持锁重载可见，不独立证明掉电持久性。新增机器可读范围说明不改变历史账本或累计计数。真实宿主交付的新动作另需[持久化能力检查点](../../docs/host-delivery.md#persistence-and-recovery)，缺失或不确定时保持 UNKNOWN/HOLD；历史精确查询不因缺少新能力而重执行或重复收费。
+
+
 完整可运行配置由自有 [fixture.py](../../validation/lifecycle/fixture.py) 在全新目录生成；里面的用户、预算、指标与时间都是**合成例子，不是已批准项目默认值**。真实使用需用户/宿主按需求填完整 policy；没有空配置自动放行。
 
 policy.json (`lifecycle-policy/v1`)：task_id、risk、checks、budget、humans、reviewers、high_expert_count、low_auto、allowed_actions、merge、delivery。checks 每项 id/stage(pr 或 merge)/gate(ci、semantic、security、integration)/scope/config/required/na_reason，可附加下述有版本的 applicability；三个 PR 门禁与集成必需要求必须明确。budget 是 max_rounds/max_operations；handoff 带已消耗值。风险来自用户确认的影响，禁止由工具自行降级；样例数字不覆盖已定试点上限或宿主更严限制。

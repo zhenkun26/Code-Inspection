@@ -9,6 +9,7 @@ import copy
 from concurrent.futures import CancelledError
 from dataclasses import FrozenInstanceError
 from datetime import timedelta
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -31,6 +32,11 @@ TARGET = 'self-owned-isolated-target'
 GUARANTEES = ['conditional_apply', 'durable_idempotency']
 DATA = content_tests.DATA
 sha = content_tests.sha
+PERSISTENCE_ID = 'synthetic-owned-persistence'
+PERSISTENCE_VERSION = 'fixture-checkpoint-1'
+PERSISTENCE_TARGET = 'self-owned-fixture-store'
+PERSISTENCE_CONFIG = sha(b'synthetic checkpoint storage configuration')
+PERSISTENCE_QUALIFICATION = 'synthetic-local-fixture-only'
 
 
 def selection():
@@ -41,6 +47,40 @@ def selection():
 
 def state_digest(value):
     return core.digest({k: v for k, v in value.items() if k != 'observed_at'})
+
+
+def persistence_selection():
+    return {'schema': 'host-persistence-policy/v1', 'adapter_id': PERSISTENCE_ID,
+            'adapter_version': PERSISTENCE_VERSION, 'storage_target': PERSISTENCE_TARGET,
+            'config_sha256': PERSISTENCE_CONFIG, 'qualification': PERSISTENCE_QUALIFICATION}
+
+
+class SyntheticPersistence:
+    """Operational local test checkpoint; no production/power-loss qualification."""
+    def __init__(self):
+        for name, value in persistence_selection().items():
+            if name != 'schema':
+                setattr(self, name, value)
+        self.checkpoints = []
+        self.hook = None
+
+    def checkpoint(self, binding, snapshot):
+        self.checkpoints.append((copy.deepcopy(binding), snapshot))
+        root = Path(binding['root']['locator'])
+        with (root / 'state.json').open('r+b') as saved:
+            if saved.read() != snapshot:
+                raise ValueError('synthetic checkpoint saved bytes mismatch')
+            os.fsync(saved.fileno())
+        if os.name == 'posix':
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        if self.hook is not None:
+            return self.hook(binding, snapshot)
+        return {'schema': 'host-persistence-confirmation/v1',
+                'status': 'confirmed', 'binding': copy.deepcopy(binding)}
 
 
 class SyntheticProvider:
@@ -131,12 +171,16 @@ class HostDelivery(unittest.TestCase):
         content_tests.ArtifactContent.setUp(self)
         self.provider = SyntheticProvider()
         self.registry = {PROVIDER_ID: self.provider}
+        self.persistence = SyntheticPersistence()
+        self.persistence_registry = {PERSISTENCE_ID: self.persistence}
 
     def session(self):
-        return core.Session(self.host, self.pin, delivery_providers=self.registry)
+        return core.Session(self.host, self.pin, delivery_providers=self.registry,
+                            persistence_adapters=self.persistence_registry)
 
     def start(self, required=None):
         self.policy['delivery_provider'] = selection()
+        self.policy['persistence'] = persistence_selection()
         content_tests.ArtifactContent.start(self, required=required)
 
     def plan(self, source=None, action='deploy', approve=True, **extra):
@@ -717,8 +761,10 @@ class HostDelivery(unittest.TestCase):
         helper.setUp()
         self.addCleanup(helper.doCleanups)
         helper.policy['delivery_provider'] = selection()
+        helper.policy['persistence'] = persistence_selection()
         helper.session = lambda: core.Session(helper.host, helper.pin,
-            verifiers=helper.verifiers, delivery_providers=self.registry)
+            verifiers=helper.verifiers, delivery_providers=self.registry,
+            persistence_adapters=self.persistence_registry)
         helper.start()
         source = helper.merged()
         proposal = helper.deployment(source)

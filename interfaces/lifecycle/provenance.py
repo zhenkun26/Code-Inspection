@@ -254,7 +254,7 @@ def capture(s, descriptor, source_subject, tree, content, action, intent):
     return copy.deepcopy(result['proof'])
 
 
-def fresh(s, proof, source_subject, tree, content, action, intent):
+def fresh(s, proof, source_subject, tree, content, action, intent, *, return_observation=False):
     require_binding(s, action, proof)
     if proof is None:
         return None
@@ -264,7 +264,9 @@ def fresh(s, proof, source_subject, tree, content, action, intent):
     require(_time(result['proof']['result']['built_at']) == _time(stored['result']['built_at']),
             'UNKNOWN: build completion identity changed; replan')
     # The earlier intent remains immutable even when a callback returns a new check.
-    return stored
+    # An executor may retain the fresh observation ephemerally across a slow host
+    # checkpoint. The default historical proof and saved proposal stay unchanged.
+    return copy.deepcopy(result['proof']) if return_observation else stored
 
 
 def report(proof):

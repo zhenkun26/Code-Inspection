@@ -66,7 +66,7 @@ def save(root, name, value):
 
 class Session:
     def __init__(self, host_root, policy_sha, metrics=None, *, verifiers=None, delivery_providers=None,
-                 temporary_namespace=None):
+                 temporary_namespace=None, persistence_adapters=None):
         self.metrics = metrics
         # Only trusted host Python code can supply capabilities; records cannot.
         require(verifiers is None or (type(verifiers) is dict and all(
@@ -78,10 +78,18 @@ class Session:
                 for name in ('read','apply','query')) for k,v in delivery_providers.items())),
             'trusted delivery provider registry required')
         self.delivery_providers = dict(delivery_providers or {})
+        try:
+            require(persistence_adapters is None or (type(persistence_adapters) is dict and all(
+                isinstance(k,str) and bool(k.strip()) and callable(getattr(v,'checkpoint',None))
+                for k,v in persistence_adapters.items())), 'trusted persistence adapter registry required')
+        except Exception:
+            raise ValueError('trusted persistence adapter registry required') from None
+        self.persistence_adapters = dict(persistence_adapters or {})
         self.accounting_trusted = False
         self.accounting_durability = 'unknown'
         self.current_attempt = None
         self._persistence_failed = False
+        self._locked_active = False
         self.root = checked_root(host_root)
         from interfaces.lifecycle.owned_temporary import ManagedTemporaryNamespace
         require(temporary_namespace is None or (type(temporary_namespace) is ManagedTemporaryNamespace
@@ -94,7 +102,7 @@ class Session:
         self.policy = decode_json(raw)
         p = self.policy
         keys(p, ['schema','task_id','risk','checks','budget','humans','reviewers','high_expert_count',
-                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content','source_content','build_provenance','delivery_provider'])
+                 'low_auto','allowed_actions','merge','delivery'], ['artifact_content','source_content','build_provenance','delivery_provider','persistence'])
         require(p['schema']=='lifecycle-policy/v1', 'policy schema')
         text(p['task_id']); require(p['risk'] in {'low','medium','high'}, 'risk')
         require(type(p['low_auto']) is bool, 'low_auto boolean')
@@ -139,8 +147,10 @@ class Session:
                 self._persistence_failed = False
                 self.accounting_trusted = True
                 self.accounting_durability = 'persisted' if state is not None else 'unknown'
+                self._locked_active = True
                 yield self
             finally:
+                self._locked_active = False
                 self.root = original
 
     def require_usable(self):

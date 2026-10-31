@@ -11,7 +11,7 @@ import re
 from concurrent.futures import CancelledError
 
 from interfaces.lifecycle.core import digest, keys, now, require, subject, timestamp
-from interfaces.lifecycle import artifacts, provenance
+from interfaces.lifecycle import artifacts, provenance, persistence
 from interfaces.lifecycle import delivery as local
 
 ACTIONS = {'deploy', 'rollback'}
@@ -342,7 +342,7 @@ def _fresh(s, proposal, state):
                 'HOLD: unresolved PR evidence or finding')
         require(proposal['source'] == {'merge_plan': local.merge_source(s, proposal['parameters']['artifact'])},
                 'HOLD: host deployment merge relation changed')
-    local.fresh_provenance(s, proposal)
+    return local.fresh_provenance(s, proposal, return_observation=True)
 
 
 def plan(s, record):
@@ -438,7 +438,7 @@ def _record_result(s, proposal, request, result):
     s.state['delivery'].setdefault('requests', {})[proposal['id']] = stored
     s.event('delivery-host-result', {'operation': proposal['id'], 'status': status,
                                     'result_digest': digest(result)})
-    # A persistence exception must escape: no successful return without durability.
+    # A save exception must escape: no successful return without local visibility.
     s.persist()
 
 
@@ -462,7 +462,7 @@ def query(s, operation):
     s.require_usable()
     proposal, request, result = _operation(s, operation)
     if result is not None:
-        # Exact durable historical result; deliberately no registry lookup/read.
+        # Exact locally saved historical result; deliberately no registry lookup/read.
         return _output(proposal, result, historical=True)
     if request is None:
         return _output(proposal, {'status': 'not_applied', 'reason': 'No recorded host delivery attempt.'})
@@ -484,18 +484,44 @@ def execute(s, operation):
     proposal, request, result = _operation(s, operation)
     if request is not None or result is not None:
         return query(s, operation)
+    checkpoint_selection, checkpoint_adapter = persistence.selected(s)
     _unsettled(s, proposal['provider']['target'], except_operation=operation)
     provider = selected(s)
     require(provider is not None, 'UNKNOWN: trusted host delivery provider unavailable')
     state = _read(s, provider)
-    _fresh(s, proposal, state)
+    fresh_observation = _fresh(s, proposal, state)
     snapshot = artifacts.fresh(s, 'delivery-' + proposal['action'], proposal['artifact_content'])
     artifacts.check_snapshot(snapshot, proposal['artifact_content'])
     s.charge(operation='delivery-execute')
     request = dict(request_intent(proposal, now().isoformat()), result='pending')
     s.state['delivery'].setdefault('requests', {})[operation] = copy.deepcopy(request)
     s.event('delivery-requested', {'operation': operation, 'provider': copy.deepcopy(proposal['provider'])})
-    s.persist()  # Durable pending before the one and only apply callback.
+    s.persist()  # Save visibility alone does not establish qualified durability.
+    persistence.checkpoint(s, proposal, request, checkpoint_selection, checkpoint_adapter)
+    # The checkpoint can take time. Recheck current local PR eligibility and the
+    # exact host action authority without invoking the build verifier again.
+    try:
+        if proposal['action'] == 'deploy':
+            require(local.pr_evaluate(s)['recommendation'] == 'READY_FOR_NEXT',
+                    'HOLD: PR eligibility expired during host persistence checkpoint')
+        _state(state, config(s), fresh=True)
+        if fresh_observation is not None:
+            observed = fresh_observation['result']
+            current = provenance.now()
+            require(timestamp(observed['checked_at']) <= current <= timestamp(observed['expires_at'])
+                    and (current - timestamp(observed['built_at'])).total_seconds()
+                    <= provenance.config(s)['max_age_seconds'],
+                    'HOLD: fresh build observation expired during host persistence checkpoint')
+        require(s.authorized('delivery-' + proposal['action'], proposal['id']),
+                'HOLD: host delivery authority revoked or expired after checkpoint')
+    except BaseException as exc:
+        s._persistence_failed = True
+        s.accounting_durability = 'unknown'
+        if isinstance(exc, CancelledError):
+            raise CancelledError('HOLD: host delivery authority recheck cancelled; locked reload required') from None
+        if isinstance(exc, Exception):
+            raise ValueError('HOLD: host delivery eligibility unavailable, revoked or expired after checkpoint; locked reload required') from None
+        raise
     result = _callback(s, provider, 'apply', proposal, request, snapshot)
     _record_result(s, proposal, request, result)
     # Apply evidence is a historical operation result, not a fresh global read.
@@ -518,7 +544,7 @@ def evaluate(s):
     except ValueError:
         pass
     receipts = []
-    checks = []
+    checks = [persistence.readiness(s)]
     for operation, proposal in s.state['delivery'].get('plans', {}).items():
         if type(proposal) is dict and proposal.get('schema') == 'host-delivery-proposal/v1':
             intent, request, receipt = _operation(s, operation)
