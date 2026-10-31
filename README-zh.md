@@ -36,7 +36,7 @@ cd Code-Inspection
 
 未包含原生托管CI/SARIF结果导入器、身份认证或生产部署/开关/指标/回滚provider，不自动创建PR、评论、合并真实项目或部署。未实现评测数据集及评分器。
 
-可选[宿主交付接口](docs/host-delivery.md)接受受信 Python 宿主按政策提供的 deploy/rollback provider。缺能力保持 UNKNOWN/HOLD，默认 CLI 不安装 provider；条件更新、身份认证和持久幂等仍需使用者实际接入及验收。其他真实交付动作暂不支持。
+可选[宿主交付接口](docs/host-delivery.md)接受受信 Python 宿主按政策提供的 deploy/rollback provider。缺能力保持 UNKNOWN/HOLD，默认 CLI 不安装 provider；新外部动作还必须取得政策选定的实际持久化检查点确认；普通保存或重载成功不证明掉电持久性。条件更新、身份认证、存储保证和持久幂等仍需使用者实际接入及验收。其他真实交付动作暂不支持。
 
 可选[构建来源核验契约](docs/build-provenance.md)接受受信 Python 宿主按政策提供的核验器，将结果绑定到精确来源、组合树、配置、产物、运行及计划。项目不内置外部 CI 身份或签名核验器；必需能力未接入时，新动作保持 UNKNOWN/HOLD，历史恢复不代表重新认证。
 

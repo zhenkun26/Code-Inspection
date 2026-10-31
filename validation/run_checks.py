@@ -19,6 +19,7 @@ TESTS = ['security-integration/test_interface.py', 'security-integration/test_he
          'lifecycle/test_applicability.py', 'lifecycle/test_budget_accounting.py',
          'lifecycle/test_budget_attempts.py', 'lifecycle/test_artifact_content.py',
          'lifecycle/test_build_provenance.py', 'lifecycle/test_host_delivery.py',
+         'lifecycle/test_persistence_contract.py',
          'lifecycle/test_temporary_inspection.py', 'lifecycle/test_owned_temporary.py',
          'lifecycle/test_source_content.py', 'test_source_manifests.py',
          'test_bounded_process.py', 'test_windows_manifests.py',

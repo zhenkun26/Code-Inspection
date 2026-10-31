@@ -406,7 +406,7 @@ def provenance_context(s,proposal):
     return None,None
 
 
-def fresh_provenance(s,proposal):
+def fresh_provenance(s,proposal,*,return_observation=False):
     if 'build_provenance' not in proposal:
         action=proposal['action']
         name=('delivery-flag-enable' if action=='flag-set' and proposal['parameters']['enabled']
@@ -419,8 +419,10 @@ def fresh_provenance(s,proposal):
         require(not provenance.required(s,name) and 'build_provenance' not in proposal,
                 'UNKNOWN: build provenance historical source missing')
         return
-    provenance.fresh(s,proposal.get('build_provenance'),origin['source_subject'],
-                     origin['tree'],proposal.get('artifact_content'),name,proposal)
+    observation = provenance.fresh(s,proposal.get('build_provenance'),origin['source_subject'],
+                     origin['tree'],proposal.get('artifact_content'),name,proposal,
+                     return_observation=return_observation)
+    return observation if return_observation else None
 
 
 def fresh_conditions(s,p,proposal,state):

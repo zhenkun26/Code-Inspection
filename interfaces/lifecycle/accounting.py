@@ -42,6 +42,8 @@ def budget_report(session, metrics):
     ledger = {
         'scope': 'host_lifecycle_ledger', 'status': 'unknown',
         'basis': 'unavailable', 'durability': 'unknown',
+        'durability_scope': {'save_or_reload_visibility': 'unknown', 'power_loss': 'unknown',
+                             'host_qualified_checkpoint': 'not_asserted'},
         'operation_attempts': {'unit': 'started_lifecycle_operation', 'used': None,
                                'limit': None, 'remaining': None, 'exhausted': None},
         'review_rounds': {'unit': 'review_round', 'used': None, 'limit': None,
@@ -57,6 +59,7 @@ def budget_report(session, metrics):
             durable = session.accounting_durability == 'persisted'
             ledger.update(status='known', basis='persisted_ledger' if durable else 'session_snapshot',
                           durability='persisted' if durable else 'unknown')
+            ledger['durability_scope']['save_or_reload_visibility'] = 'confirmed' if durable else 'unknown'
             for name, used_key, limit_key in [('operation_attempts', 'operations', 'max_operations'),
                                                ('review_rounds', 'rounds', 'max_rounds')]:
                 ledger[name].update(used=used[used_key], limit=limit[limit_key],

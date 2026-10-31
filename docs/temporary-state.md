@@ -52,7 +52,7 @@ Recovery validates the exact selected record and payload under the lock, with bo
 
 **POSIX boundary:** descriptor-relative operations and rechecks do not provide atomic “unlink this inode only” protection against a nonparticipating writer replacing a name between verification and unlink. The explicit trusted-namespace precondition is therefore mandatory; without it or without the exact cleanup grant, no deletion is authorized. Never present these tests as proof of safety against a hostile same-host writer. SIGKILL cannot run `finally`; cleanup happens only on a later explicit safe recovery attempt, and some early/uncertain residues remain.
 
-**Windows boundary:** the new managed write/recovery capability fails closed. The existing Windows reader/lock is not an identity-bound deletion backend. Native managed recovery is not implemented or tested in this Mac-only batch; legacy save and metadata-only `temp-report` remain unchanged. Do not interpret skipped POSIX cases as Windows cleanup acceptance. No current user residue is removed by adopting this version.
+**Windows boundary:** the new managed write/recovery capability fails closed. The existing Windows reader/lock is not an identity-bound deletion backend. Native managed recovery is not implemented; the separate [Windows API experiment](windows-temporary-qualification.md) observes system calls but does not qualify product recovery or power-loss persistence; legacy save and metadata-only `temp-report` remain unchanged. Do not interpret skipped POSIX cases as Windows cleanup acceptance. No current user residue is removed by adopting this version.
 
 ## 简体中文
 
@@ -82,4 +82,4 @@ Recovery validates the exact selected record and payload under the lock, with bo
 
 **POSIX 限制：** dir-fd 操作与重查并不提供“仅删除这个 inode”的原子条件；非协作写入者仍可能在检查与 unlink 之间替换名字。因此排他命名空间是强制宿主前提，不满足或无明确删除授权时不得删除。不能把测试称为抵御恶意同机写入者的证明。SIGKILL 不会执行 finally；只能在后续明确的安全恢复中处理符合条件的资源，早期或不确定残留可能继续保留。
 
-**Windows 限制：** 新受控写入/恢复能力保守拒绝；现有安全读取和锁不等于同句柄删除后端。本 Mac 本地批次未实现或原生验证 Windows 受控恢复，旧 save 与仅元数据报告不变。POSIX 用例跳过不是 Windows 清理验收，采用此版本不自动删除任何用户历史残留。
+**Windows 限制：** 新受控写入/恢复能力保守拒绝；现有安全读取和锁不等于同句柄删除后端。Windows 受控恢复尚未实现；单独的 [Windows API 实验](windows-temporary-qualification.md)仅观察系统调用，不证明产品恢复或掉电持久性，旧 save 与仅元数据报告不变。POSIX 用例跳过不是 Windows 清理验收，采用此版本不自动删除任何用户历史残留。
