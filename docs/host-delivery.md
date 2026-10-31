@@ -70,14 +70,6 @@ The host must qualify the implementation and target storage, including the effec
 
 A missing/mismatched adapter stops before charge. Failure, cancellation, unconfirmed/malformed confirmation or changed saved state after pending publication prevents apply and fences the Session. A successful locked reload can restore read/query access; a recorded pending operation remains query-only without another charge, even if the persistence adapter, current authority or artifact is unavailable. It is not permission to resend. Local save failures retain their existing uncertainty handling. Checkpoint confirmation does not turn later receipt save/reload visibility into a universal power-loss guarantee.
 
-### 简体中文：持久化边界
-
-普通保存对暂存文件执行 fsync 后替换账本，没有同步父目录；`persisted` 兼容标签只说明保存成功或持锁重载可见，机器可读范围仍将掉电持久性标为 unknown。新外部交付动作必须由受信政策选择、Python 宿主实际注入具有匹配身份/配置/资格范围的检查点实现；任意布尔值、自填报告或资格名称不能授权。
-
-缺能力时在收费前 UNKNOWN/HOLD；pending 保存后，以精确字节、根身份、政策、操作、请求及本次随机挑战绑定实际检查点，确认与重新读取一致后，还需复核本地 PR 条件、已有 provider 观测、本次核验结果有效期及精确真人批准，再调用 apply；本次核验结果仅保存在内存，不重复调用核验器或改写批准的历史证明。适配器错误、取消、错关联、未知结果或期间变化都会阻止 apply，并保留 Session 失败隔离。宿主必须证明所选存储实现的适用保证，包括后续回执替换和恢复，并负责回调时限及取消；接口不强制终止任意受信 Python 代码。合成 fixture 只验证接口，不证明真实存储或掉电安全。
-
-旧账本不升级保证、不清预算、不沿用新政策下的批准。已尝试操作及合法历史回执仍可按原身份查询，不因缺新适配器、预算耗尽或当前批准/产物缺失重复执行或收费。清理不能解除保存失败隔离，Windows 产品清理继续禁用。默认 Markdown Skill 和本地模拟不需要此可选能力，也不安装服务、模型或新运行依赖。
-
 ## Verification and limits
 
 Use the existing maintained checker and fixed mutation checks. New fixtures cover exact binding, missing capabilities, unsupported actions, immutable consumption, drift, failed/unknown/cancelled calls, persistence faults, historical recovery and no replay/charge. They make no production calls. Actual provider acceptance still requires the user's selected target, authenticated transport, permissions, conditional-write/idempotency implementation, independent outcome readback and negative/failure tests in an authorized environment.
