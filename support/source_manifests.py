@@ -166,10 +166,12 @@ def validate(manifest):
                     and type(directory['mode']) is int and (directory['mode'] in {0,1} if windows else 0 <= directory['mode'] <= 0o7777),
                     'UNKNOWN: directory projection')
             directory_paths.append(directory['path'])
-        require(directory_paths == sorted(set(directory_paths), key=lambda x:x.encode('utf-8'))
-                and not set(paths) & set(directory_paths)
-                and len(paths)+len(directory_paths) <= config['max_files'], 'UNKNOWN: directory coverage')
-        paths += directory_paths
+        directory_set = set(directory_paths)
+        # Historical Git files may now be directories, with no worktree file.
+        require(directory_paths == sorted(directory_set, key=lambda x:x.encode('utf-8'))
+                and all(item['worktree'] is None for item in entries if item['path'] in directory_set)
+                and len(set(paths)|directory_set) <= config['max_files'], 'UNKNOWN: directory coverage')
+        paths = set(paths)|directory_set
     _collision(paths)
     _coverage(paths, config)
     # Total describes logical projections, even if Git blobs were read only once.

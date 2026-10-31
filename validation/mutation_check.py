@@ -1013,6 +1013,56 @@ LOCAL_DELIVERY_CASES = [('local-delivery-one-verifier',
   'LocalDeliveryVerification.test_private_context_is_bound_to_provider_and_consumed_on_refusal')]
 CASES += LOCAL_DELIVERY_CASES
 
+MANIFEST_TRANSITION_CASES = [('source-transition-current-file-directory',
+  'support/source_manifests.py',
+  "all(item['worktree'] is None for item in entries if item['path'] in directory_set)",
+  'True',
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_cannot_claim_current_file_and_directory'),
+ ('source-transition-blanket-disjoint',
+  'support/source_manifests.py',
+  "all(item['worktree'] is None for item in entries if item['path'] in directory_set)",
+  'not set(paths) & directory_set',
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_file_to_directory_staged_and_unstaged'),
+ ('source-transition-double-count',
+  'support/source_manifests.py',
+  "len(set(paths)|directory_set) <= config['max_files']",
+  "len(paths)+len(directory_paths) <= config['max_files']",
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_unique_path_count_and_portable_mode_models'),
+ ('source-transition-selected-cap',
+  'support/source_manifests.py',
+  "len(set(paths)|directory_set) <= config['max_files']",
+  'True',
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_unique_path_count_and_portable_mode_models'),
+ ('source-transition-directory-unique',
+  'support/source_manifests.py',
+  "directory_paths == sorted(directory_set, key=lambda x:x.encode('utf-8'))",
+  'True',
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_path_coverage_collision_and_projection_limits'),
+ ('source-transition-prepayload-cap',
+  'support/source_manifests.py',
+  "require(len(set(before)|set(heads)|set(indexes)) <= config['max_files'], 'UNKNOWN: manifest entry limit')",
+  "require(True, 'UNKNOWN: manifest entry limit')",
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_capture_selected_limit_precedes_payload'),
+ ('source-transition-dirty-is-not-committed',
+  'support/source_manifests.py',
+  'if h is None or i is None or w is None: return False',
+  'if h is None or i is None or w is None: return True',
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_unique_path_count_and_portable_mode_models')]
+POSIX_MANIFEST_TRANSITION_CASES = [('source-transition-observed-replacement',
+  'support/source_manifests.py',
+  "require(source.walk(config, metrics) == before, 'UNKNOWN: source changed during capture')",
+  "require(True, 'UNKNOWN: source changed during capture')",
+  'validation/test_source_manifests.py',
+  'SourceManifestTests.test_transition_observed_directory_replacement_is_refused')]
+CASES += MANIFEST_TRANSITION_CASES + POSIX_MANIFEST_TRANSITION_CASES
+
 def main():
     os.environ['CODE_INSPECTION_KEEP_TEST_ARTIFACTS'] = '1'
     output = Path(temporary_directory().name)
@@ -1027,7 +1077,8 @@ def main():
     if os.name == 'nt':
         posix_owned = {x[0] for x in OWNED_TEMPORARY_CASES}
         cases = [x for x in CASES if x[0] != 'leaf-no-follow' and x[0] not in POSIX_SOURCE_CASES
-                 and x[0] not in posix_owned and x[0] != 'owned-platform-refusal'] + WINDOWS_MANIFEST_CASES + [
+                 and x[0] not in posix_owned and x[0] != 'owned-platform-refusal'
+                 and x[0] not in {case[0] for case in POSIX_MANIFEST_TRANSITION_CASES}] + WINDOWS_MANIFEST_CASES + [
             ('windows-no-reparse', 'support/windows_files.py', 'OBJ_DONT_REPARSE = 0x1000', 'OBJ_DONT_REPARSE = 0',
              'validation/test_native_files.py', 'WindowsFiles.test_junction_and_symlink_all_positions'),
             ('windows-lock', 'support/windows_files.py',
