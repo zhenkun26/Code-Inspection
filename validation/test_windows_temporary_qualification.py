@@ -280,6 +280,22 @@ class QualificationProtocol(unittest.TestCase):
                 owned.ManagedTemporaryNamespace('unused', '0' * 64, exclusive_namespace=True)
             opening.assert_not_called()
 
+    def test_native_workflow_keeps_modes_bounded_and_failures_visible(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        steps = workflow.split('      - name: ')[1:]
+        native = [step for step in steps if 'windows_temporary_qualification.py' in step]
+        self.assertEqual(len(native), 2)
+        for step, mode in zip(native, ['-B', '-O -B']):
+            self.assertIn("if: ${{ !cancelled() && runner.os == 'Windows' }}", step)
+            self.assertIn('timeout-minutes: 2\n', step)
+            self.assertIn('run: python ' + mode + ' validation/windows_temporary_qualification.py --authorize-owned-fixture\n', step)
+            self.assertNotIn('continue-on-error', step)
+        self.assertLess(workflow.index('run: python -B validation/mutation_check.py'),
+                        workflow.index(native[0]))
+        self.assertIn('permissions:\n  contents: read\n', workflow)
+        self.assertIn('persist-credentials: false', workflow)
+        self.assertNotIn('pull_request_target:', workflow)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

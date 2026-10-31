@@ -11,7 +11,7 @@ python -B validation/windows_temporary_qualification.py --authorize-owned-fixtur
 python -O -B validation/windows_temporary_qualification.py --authorize-owned-fixture
 ```
 
-These are proposed native qualification commands, not evidence they have run. They are not enabled in the current CI workflow. Pure orchestration tests are included in the normal maintained checker; mocked orchestration and non-Windows refusal are not native qualification.
+This branch wires both commands into the existing Windows CI job, after the maintained checks and mutations. Each step has an additional two-minute workflow bound; either experiment failure remains a job failure, and the second mode still runs unless the job is cancelled. Configuration is not evidence of execution: inspect the exact commit's actual logs. Pure orchestration tests are included in the normal maintained checker; mocked orchestration and non-Windows refusal are not native qualification.
 
 The experiment keeps three conclusions separate:
 
@@ -31,7 +31,7 @@ This small probe is not a complete ownership/recovery implementation. It does no
 
 ## Runtime and publication boundary
 
-The worker has a 55-second watchdog; the parent applies a 60-second direct-worker deadline plus the existing bounded cleanup attempt and bounded output. Native duration is unmeasured until executed; reserve roughly three minutes for both modes, including startup and cleanup allowance. Timeout cleanup can remain UNKNOWN. No process-tree/sandbox guarantee is added. Reuse the existing Windows runner if a future explicitly authorized CI patch runs this experiment; no added service or matrix is necessary. Actual billed usage depends on the user's GitHub plan and run duration; this is not a zero-cost claim. The current patch neither launches remote CI nor changes its limits.
+The worker has a 55-second watchdog; the parent applies a 60-second direct-worker deadline plus the existing bounded cleanup attempt and bounded output. Native duration is unmeasured until executed; reserve roughly three minutes for both modes, including startup and cleanup allowance. Timeout cleanup can remain UNKNOWN. No process-tree/sandbox guarantee is added. The workflow reuses the existing Windows runner without adding a service or matrix, or changing existing job/check timeouts. Actual billed usage depends on the user's GitHub plan and run duration; this is not a zero-cost claim.
 
 ## 简体中文
 
@@ -41,6 +41,6 @@ The worker has a 55-second watchdog; the parent applies a 60-second direct-worke
 
 实验区分 API 调用返回值、同句柄删除/关闭/路径缺失的可观察事实，以及仍然 UNKNOWN 的目录项和掉电持久性。即使调用成功，输出也必须保留“未资格通过、产品未启用”；完成观测不等于生产验收或审批。超时、畸形结果、非预期失败保持未完成/未知，不重试删除，也不由父进程清扫超时工作进程的目录。
 
-当前工作流未启用这两条原生命令，Mac 拒绝/模拟编排测试不能代替 Windows 原生运行。本实验也不是全套归属协议；所有崩溃点、重解析点/映射/ADS 威胁、重启/故障存储及四阶段联动仍需后续验收，POSIX 和旧 Windows 行为不变。
+本分支在既有 Windows job 的维护检查及变异之后接入两条原生命令，各步骤另设两分钟工作流上限；失败仍使 job 失败，未取消时第二模式仍执行。配置存在不代表已运行，应查精确提交的实际日志；Mac 拒绝/模拟编排测试不能代替 Windows 原生运行。本实验也不是全套归属协议；所有崩溃点、重解析点/映射/ADS 威胁、重启/故障存储及四阶段联动仍需后续验收，POSIX 和旧 Windows 行为不变。
 
-工作进程有 55 秒看门狗，父进程另设 60 秒上限，并有既有有界清理尝试和输出上限；两模式可预留约三分钟，实际原生时长仍未测量，超时后的清理也可能 UNKNOWN。后续若单独批准 CI 实验，可复用现有 Windows runner，不新增服务/矩阵；实际费用取决于账户计划与用时，不能称免费。本补丁不运行远端实验、不调整 CI 时限。
+工作进程有 55 秒看门狗，父进程另设 60 秒上限，并有既有有界清理尝试和输出上限；两模式可预留约三分钟，实际原生时长仍未测量，超时后的清理也可能 UNKNOWN。工作流复用现有 Windows runner，不新增服务/矩阵，不调整既有 job 或检查时限；实际费用取决于账户计划与用时，不能称免费。

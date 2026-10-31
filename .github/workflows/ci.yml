@@ -52,3 +52,11 @@ jobs:
       - name: Check fixed guard-removal regressions
         if: matrix.python == '3.13'
         run: python -B validation/mutation_check.py
+      - name: Observe isolated Windows temporary APIs
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        timeout-minutes: 2
+        run: python -B validation/windows_temporary_qualification.py --authorize-owned-fixture
+      - name: Observe optimized isolated Windows temporary APIs
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        timeout-minutes: 2
+        run: python -O -B validation/windows_temporary_qualification.py --authorize-owned-fixture
