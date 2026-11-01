@@ -246,11 +246,25 @@ def validated_operation(s,operation,state,seen=None):
     return proposal,request,receipt
 
 
+class _LocalVerification:
+    """One execute's fresh observation, never serialized or accepted as input."""
+    def __init__(self,provider,proposal,observation):
+        self.provider=provider;self.session=provider.s
+        self.proposal=copy.deepcopy(proposal);self.observation=copy.deepcopy(observation)
+
+    def check(self,provider,proposal):
+        require(self.provider is provider and self.session is provider.s
+                and digest(self.proposal)==digest(proposal),
+                'UNKNOWN: local delivery verification context mismatch')
+        _retained_provenance(provider.s,proposal,self.observation)
+
+
 class LocalSimulation:
     """Host contract: validated read/apply/query; no external side effects."""
     def __init__(self,s):
         s.require_usable()
         self.s=s
+        self._verification=None
         ledger=s.state['delivery'];keys(ledger,[],['plans','requests','observations','host_results'])
         for name in ['plans','requests']:
             require(isinstance(ledger.get(name,{}),dict),'delivery '+name+' map')
@@ -284,13 +298,25 @@ class LocalSimulation:
                 {'result':absent},'state':state,
                 'content_binding':artifacts.report(proposal.get('artifact_content')),
                 'provenance_binding':provenance.report(proposal.get('build_provenance'))}
+    def _prepare(self,proposal,state):
+        self._verification=None
+        observation=fresh_conditions(self.s,self,proposal,state)
+        self._verification=_LocalVerification(self,proposal,observation)
+
     def apply(self,plan,snapshot=None):
+        # Consume the executor-owned context once, including on refusal/error.
+        verification=self._verification;self._verification=None
         self.s.require_usable()
         state=self.read();proposal,request,receipt=validated_operation(self.s,plan['id'],state)
         require(digest(plan)==digest(proposal),'delivery apply proposal mismatch')
         if receipt is not None:return self.query(proposal['id'])
         require(request is not None and request['result']=='pending','delivery pending attempt required')
-        fresh_conditions(self.s,self,proposal,state)
+        if verification is None:
+            verification=_LocalVerification(self,proposal,fresh_conditions(self.s,self,proposal,state))
+        require(type(verification) is _LocalVerification,
+                'UNKNOWN: local delivery verification context required')
+        _local_conditions(self.s,self,proposal,state)
+        verification.check(self,proposal)
         content=proposal.get('artifact_content')
         consumes=content is not None and proposal['action'] in {'deploy','rollback'}
         # Consume the caller's captured bytes; fresh eligibility never reopens them.
@@ -425,7 +451,30 @@ def fresh_provenance(s,proposal,*,return_observation=False):
     return observation if return_observation else None
 
 
-def fresh_conditions(s,p,proposal,state):
+def _retained_provenance(s,proposal,observation):
+    """Validate the fresh observation again without reading evidence or callback."""
+    stored=proposal.get('build_provenance')
+    if stored is None:
+        require(observation is None,'UNKNOWN: unexpected local build observation')
+        fresh_provenance(s,proposal)  # Still reject a now-required missing proof.
+        return
+    name,origin=provenance_context(s,proposal)
+    require(name is not None and origin is not None and type(observation) is dict,
+            'UNKNOWN: retained fresh build observation required')
+    provenance.require_binding(s,name,observation)
+    observed=provenance.validate(s,observation,origin['source_subject'],origin['tree'],
+                                proposal.get('artifact_content'),name,proposal)
+    require(observed['descriptor']==stored['descriptor']
+            and timestamp(observed['result']['built_at'])==timestamp(stored['result']['built_at']),
+            'UNKNOWN: retained build observation identity changed')
+    result=observed['result'];current=provenance.now()
+    require(timestamp(result['checked_at'])<=current<=timestamp(result['expires_at'])
+            and (current-timestamp(result['built_at'])).total_seconds()
+            <=provenance.config(s)['max_age_seconds'],
+            'HOLD: retained fresh build observation is no longer current')
+
+
+def _local_conditions(s,p,proposal,state):
     artifacts.policy_config(s)
     require(proposal['subject']==s.state['subject'],'stale delivery subject')
     action_state(p,proposal,state,fresh=True)
@@ -452,10 +501,14 @@ def fresh_conditions(s,p,proposal,state):
         deployed=validate_plan(s,proposal['source']['deployment_operation'],state)
         require(proposal.get('artifact_content')==deployed.get('artifact_content'),
                 'HOLD: deployment content relation changed; replan')
-    fresh_provenance(s,proposal)
     if action=='promote' or (action=='flag-set' and v['enabled'] and v['cohort']!=p.config['initial_cohort']):
         require(p.config['capabilities']['observation']['enabled'] and observation_status(s,p,state)['status']=='PASS',
                 'HOLD: observation no longer valid')
+
+
+def fresh_conditions(s,p,proposal,state):
+    _local_conditions(s,p,proposal,state)
+    return fresh_provenance(s,proposal,return_observation=True)
 
 
 def plan(s,record):
@@ -552,17 +605,20 @@ def execute(s,operation):
     if request is not None or receipt is not None:return p.query(operation)
     require('delivery_provider' not in s.policy,
             'UNKNOWN: selected host provider cannot start a fresh simulation action')
-    fresh_conditions(s,p,proposal,state)
-    snapshot=None
-    if proposal['action'] in {'deploy','rollback'}:
-        # Acquire before recording a new attempt, then pass these exact bytes to apply.
-        snapshot=artifacts.fresh(s,'delivery-'+proposal['action'],proposal.get('artifact_content'))
-    s.charge(operation='delivery-execute');request=request_intent(proposal,now().isoformat())
-    s.state['delivery'].setdefault('requests',{})[operation]=request
-    s.event('delivery-requested',{'operation':operation});s.persist()
-    try:out=p.apply(proposal,snapshot=snapshot) if snapshot is not None else p.apply(proposal)
-    except (ValueError,OSError):
-        request['result']='unknown';s.persist();raise
+    p._prepare(proposal,state)
+    try:
+        snapshot=None
+        if proposal['action'] in {'deploy','rollback'}:
+            # Acquire before recording a new attempt, then pass these exact bytes to apply.
+            snapshot=artifacts.fresh(s,'delivery-'+proposal['action'],proposal.get('artifact_content'))
+        s.charge(operation='delivery-execute');request=request_intent(proposal,now().isoformat())
+        s.state['delivery'].setdefault('requests',{})[operation]=request
+        s.event('delivery-requested',{'operation':operation});s.persist()
+        try:out=p.apply(proposal,snapshot=snapshot) if snapshot is not None else p.apply(proposal)
+        except (ValueError,OSError):
+            request['result']='unknown';s.persist();raise
+    finally:
+        p._verification=None
     receipt=out['result']
     request.update(result='confirmed',receipt_sha=digest(receipt),observed_at=receipt['observed_at'])
     s.event('delivery-receipt',receipt);s.persist();return out

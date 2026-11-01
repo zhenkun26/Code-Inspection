@@ -1,4 +1,6 @@
 """Capability and failure-boundary tests for optional source manifests."""
+import copy
+import hashlib
 import importlib
 import os
 from pathlib import Path
@@ -21,6 +23,15 @@ def config(mode='directory', **changes):
     return result
 
 
+def transition_sample(mode_model='posix-permissions/v1', **limits):
+    h = dict(oid='1'*40, sha256=hashlib.sha256(b'bytes').hexdigest(), size_bytes=5, mode=0o100755)
+    mode = 0 if mode_model == 'windows-readonly/v1' else 0o755
+    return dict(schema='source-manifest/v1', mode_model=mode_model,
+                config=config('git-worktree', **limits), base='1'*40, head='2'*40, head_tree='3'*40,
+                directories=[dict(path=path, kind='directory', mode=mode) for path in ('.', 'a')],
+                entries=[dict(path='a', head=h, index=dict(h), worktree=None)])
+
+
 class SourceManifestTests(unittest.TestCase):
     def setUp(self):
         try: self.api = importlib.import_module('support.source_manifests')
@@ -38,6 +49,196 @@ class SourceManifestTests(unittest.TestCase):
         (self.root/'a').write_bytes(b'head\n')
         self.git('add', 'a'); self.git('commit', '-m', 'fixture')
         return self.git('rev-parse', 'HEAD')
+
+    def capture_transition(self, head, **limits):
+        try:
+            result = self.api.capture(self.root, config('git-worktree', **limits), base=head, head=head)
+        except ValueError as exc:
+            self.fail('supported Git type transition refused: '+str(exc))
+        self.assertEqual(result, self.api.capture(self.root, config('git-worktree', **limits), base=head, head=head))
+        self.assertFalse(self.api.committed(result))
+        return result
+
+    def test_file_to_directory_staged_and_unstaged(self):
+        head = self.repo()
+        clean = self.api.capture(self.root, config('git-worktree'), base=head, head=head)
+        original = clean['entries'][0]
+        self.assertTrue(self.api.committed(clean))
+        (self.root/'a').unlink(); (self.root/'a').mkdir()
+        snapshots = []
+        for populated in (False, True):
+            if populated:
+                (self.root/'a'/'new').write_bytes(b'new\n')
+                self.git('read-tree', head)
+            for staged in (False, True):
+                with self.subTest(populated=populated, staged=staged):
+                    if staged: self.git('add', '-A')
+                    result = self.capture_transition(head)
+                    entries = {entry['path']:entry for entry in result['entries']}
+                    self.assertEqual([entry['path'] for entry in result['directories']], ['.', 'a'])
+                    self.assertEqual(entries['a']['head'], original['head'])
+                    self.assertEqual(entries['a']['index'], None if staged else original['index'])
+                    self.assertIsNone(entries['a']['worktree'])
+                    if populated:
+                        self.assertIsNone(entries['a/new']['head'])
+                        self.assertEqual(entries['a/new']['index'] is not None, staged)
+                        self.assertIsNotNone(entries['a/new']['worktree'])
+                    snapshots.append(result)
+        self.assertEqual(len({self.api.identity(result) for result in snapshots}), 4)
+        (self.root/'a'/'new').write_bytes(b'changed\n')
+        changed = self.capture_transition(head)
+        self.assertNotEqual(self.api.identity(snapshots[-1]), self.api.identity(changed))
+        self.assertEqual(snapshots[-1]['entries'][1]['index'], changed['entries'][1]['index'])
+
+    def test_directory_to_file_staged_and_unstaged(self):
+        self.repo(); (self.root/'a').unlink(); (self.root/'a').mkdir()
+        (self.root/'a'/'old').write_bytes(b'old\n')
+        self.git('add', '-A'); self.git('commit', '-m', 'directory fixture')
+        head = self.git('rev-parse', 'HEAD')
+        clean = self.api.capture(self.root, config('git-worktree'), base=head, head=head)
+        self.assertTrue(self.api.committed(clean))
+        old = clean['entries'][0]
+        (self.root/'a'/'old').unlink(); (self.root/'a').rmdir()
+        (self.root/'a').write_bytes(b'replacement\n')
+        unstaged = self.capture_transition(head)
+        self.git('add', '-A'); staged = self.capture_transition(head)
+        for result, is_staged in ((unstaged, False), (staged, True)):
+            entries = {entry['path']:entry for entry in result['entries']}
+            self.assertEqual([entry['path'] for entry in result['directories']], ['.'])
+            self.assertEqual(entries['a/old']['head'], old['head'])
+            self.assertEqual(entries['a/old']['index'], None if is_staged else old['index'])
+            self.assertIsNone(entries['a/old']['worktree'])
+            self.assertIsNone(entries['a']['head'])
+            self.assertEqual(entries['a']['index'] is not None, is_staged)
+            self.assertIsNotNone(entries['a']['worktree'])
+        self.assertNotEqual(self.api.identity(unstaged), self.api.identity(staged))
+        self.assertEqual(unstaged['entries'][0]['worktree'], staged['entries'][0]['worktree'])
+
+    def test_index_only_file_with_worktree_directory_and_reverse(self):
+        head = self.repo()
+        (self.root/'a').unlink(); (self.root/'a').mkdir()
+        (self.root/'a'/'old').write_bytes(b'old\n')
+        self.git('add', '-A'); self.git('commit', '-m', 'directory fixture')
+        head = self.git('rev-parse', 'HEAD')
+        (self.root/'a'/'old').unlink(); (self.root/'a').rmdir()
+        (self.root/'a').write_bytes(b'index only\n'); self.git('add', '-A')
+        (self.root/'a').unlink(); (self.root/'a').mkdir()
+        (self.root/'a'/'new').write_bytes(b'current\n')
+        directory = self.capture_transition(head)
+        entries = {entry['path']:entry for entry in directory['entries']}
+        self.assertIsNone(entries['a']['head']); self.assertIsNotNone(entries['a']['index'])
+        self.assertIsNone(entries['a']['worktree'])
+        self.assertIsNotNone(entries['a/old']['head']); self.assertIsNone(entries['a/old']['index'])
+        self.assertIsNone(entries['a/new']['index']); self.assertIsNotNone(entries['a/new']['worktree'])
+        self.assertEqual([entry['path'] for entry in directory['directories']], ['.', 'a'])
+        self.git('add', '-A')
+        (self.root/'a'/'new').unlink(); (self.root/'a').rmdir()
+        (self.root/'a').write_bytes(b'current file\n')
+        reverse = self.capture_transition(head)
+        entries = {entry['path']:entry for entry in reverse['entries']}
+        self.assertIsNone(entries['a']['index']); self.assertIsNotNone(entries['a']['worktree'])
+        self.assertIsNotNone(entries['a/new']['index']); self.assertIsNone(entries['a/new']['worktree'])
+        self.assertEqual([entry['path'] for entry in reverse['directories']], ['.'])
+        self.assertNotEqual(self.api.identity(directory), self.api.identity(reverse))
+
+    def test_transition_unique_path_count_and_portable_mode_models(self):
+        for model in ('posix-permissions/v1', 'windows-readonly/v1'):
+            with self.subTest(model=model):
+                sample = transition_sample(model, max_files=2)
+                try: identity = self.api.identity(sample)
+                except ValueError as exc: self.fail('two selected paths refused: '+str(exc))
+                self.assertEqual(identity, self.api.identity(copy.deepcopy(sample)))
+                self.assertFalse(self.api.committed(sample))
+                over = copy.deepcopy(sample)
+                h = over['entries'][0]['head']
+                over['entries'].append(dict(path='b', head=dict(h), index=None, worktree=None))
+                with self.assertRaisesRegex(ValueError, 'directory coverage'): self.api.validate(over)
+                over = copy.deepcopy(sample); over['config']['max_files'] = 1
+                with self.assertRaises(ValueError): self.api.validate(over)
+
+    def test_transition_cannot_claim_current_file_and_directory(self):
+        for model in ('posix-permissions/v1', 'windows-readonly/v1'):
+            with self.subTest(model=model):
+                sample = transition_sample(model)
+                h = sample['entries'][0]['head']
+                sample['entries'][0]['worktree'] = dict(mode=sample['directories'][0]['mode'],
+                                                       size_bytes=5, sha256=h['sha256'])
+                with self.assertRaisesRegex(ValueError, 'directory coverage'): self.api.validate(sample)
+
+    def test_transition_path_coverage_collision_and_projection_limits(self):
+        sample = transition_sample()
+        for name in ('A', 'A/child', 'é', 'e\u0301/child'):
+            bad = copy.deepcopy(sample)
+            if name.startswith(('é', 'e\u0301')):
+                bad['entries'][0]['path'] = 'é'
+                bad['directories'][1]['path'] = 'é'
+                if name == 'é': name = 'e\u0301'
+            bad['directories'].append(dict(path=name, kind='directory', mode=0o755))
+            bad['directories'].sort(key=lambda entry:entry['path'].encode())
+            with self.subTest(collision=name), self.assertRaisesRegex(ValueError, 'collision'):
+                self.api.validate(bad)
+        for change in ('duplicate-directory', 'directory-order', 'duplicate-entry', 'missing-scope',
+                       'outside-scope', 'reserved', 'git-marker', 'directory-mode', 'file-bytes', 'total-bytes'):
+            bad = copy.deepcopy(sample)
+            if change == 'duplicate-directory': bad['directories'].append(dict(bad['directories'][1]))
+            elif change == 'directory-order': bad['directories'].reverse()
+            elif change == 'duplicate-entry': bad['entries'].append(copy.deepcopy(bad['entries'][0]))
+            elif change == 'missing-scope':
+                bad['config']['scope'] = ['a', 'missing']; bad['directories'].pop(0)
+            elif change == 'outside-scope': bad['config']['scope'] = ['missing']
+            elif change in ('reserved', 'git-marker'):
+                path = 'NUL' if change == 'reserved' else '.git/private'
+                bad['entries'][0]['path'] = path; bad['directories'][1]['path'] = path
+            elif change == 'directory-mode': bad['directories'][1]['mode'] = -1
+            elif change == 'file-bytes': bad['config']['max_file_bytes'] = 4
+            else: bad['config']['max_total_bytes'] = 9
+            with self.subTest(change=change), self.assertRaises(ValueError): self.api.validate(bad)
+
+    def test_transition_capture_selected_limit_precedes_payload(self):
+        self.repo(); (self.root/'b').write_bytes(b'other\n')
+        self.git('add', 'b'); self.git('commit', '-m', 'historical second file')
+        head = self.git('rev-parse', 'HEAD')
+        (self.root/'b').unlink(); (self.root/'a').unlink(); (self.root/'a').mkdir()
+        for populated, count in ((False, 3), (True, 4)):
+            with self.subTest(populated=populated):
+                if populated: (self.root/'a'/'new').write_bytes(b'new\n')
+                result = self.capture_transition(head, max_files=count)
+                paths = {entry['path'] for entry in result['entries']+result['directories']}
+                self.assertEqual(len(paths), count)
+                with patch.object(self.api, '_blobs', wraps=self.api._blobs) as blobs, \
+                        patch.object(self.api, '_read', wraps=self.api._read) as read:
+                    with self.assertRaisesRegex(ValueError, 'manifest entry limit'):
+                        self.api.capture(self.root, config('git-worktree', max_files=count-1), base=head, head=head)
+                    blobs.assert_not_called(); read.assert_not_called()
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX replacement control; native handles prevent ordinary replacement')
+    def test_transition_observed_directory_replacement_is_refused(self):
+        head = self.repo(); (self.root/'a').unlink(); (self.root/'a').mkdir()
+        leaf = self.root/'a'/'new'; leaf.write_bytes(b'current\n')
+        original = self.api._read; attempts = []
+        def changed(*args):
+            result = original(*args)
+            leaf.unlink(); (self.root/'a').rmdir(); (self.root/'a').write_bytes(b'replaced\n')
+            attempts.append(True)
+            return result
+        with patch.object(self.api, '_read', side_effect=changed):
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                self.api.capture(self.root, config('git-worktree'), base=head, head=head)
+        self.assertEqual(attempts, [True])
+
+    def test_historical_git_identity_is_unchanged_and_validation_is_pure(self):
+        expected = {'posix-permissions/v1':'048c3f67287889fa65182808bebac5519d49911ce0dc4c1b26baae81a63952d1',
+                    'windows-readonly/v1':'20ca4d7ca564e008ffe738cd9010d0924e9c0a16814e117876821b3a4ea8b50d'}
+        for model, digest in expected.items():
+            sample = transition_sample(model); sample['directories'] = []
+            h = sample['entries'][0]['head']
+            sample['entries'][0]['worktree'] = dict(mode=0 if model == 'windows-readonly/v1' else 0o755,
+                                                   size_bytes=5, sha256=h['sha256'])
+            with self.subTest(model=model), patch.object(self.api, '_source') as source, \
+                    patch.object(self.api, '_metadata') as metadata:
+                self.assertEqual(self.api.identity(sample), 'source-manifest-sha256:'+digest)
+                self.assertTrue(self.api.committed(sample))
+                source.assert_not_called(); metadata.assert_not_called()
 
     def test_directory_actual_bytes_and_mode(self):
         (self.root/'a').write_bytes(b'one')
