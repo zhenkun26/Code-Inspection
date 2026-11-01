@@ -1,32 +1,32 @@
-# 计划与独立审查任务
+# Planning and Independent Review Assignments
 
-## 从需求风险到能力
+## From Requirement Risks to Capabilities
 
-先固定契约输入，再列需求—风险—检查—证据映射。风险看实际影响、业务规则、权限/数据、不可逆性、依赖、平台与可检测性，不看文件名、行数或 bugfix/config 标签。每项计划注明覆盖、判据、是否必需及依据、版本/环境、执行者、授权、依赖、证据位置和预算。未确认的检查建议与已确认必需项分列。
+Establish the contract inputs first, then map requirements to risks, checks, and evidence. Assess risk by actual impact, business rules, permissions/data, irreversibility, dependencies, platform, and detectability, rather than filenames, line counts, or bugfix/config labels. For each planned item, state coverage, criteria, whether it is required and why, version/environment, executor, authorization, dependencies, evidence location, and budget. List unconfirmed check suggestions separately from confirmed required items.
 
-实际使用验证、确定性检查和语义审查可并行，无需强制测试先于审查；存在前序证据依赖或共享可变状态时顺序执行。diff 优先也要读调用者、接口、配置、数据和相关测试，不能只读新增行。
+Actual-use validation, deterministic checks, and semantic review may run in parallel; tests do not have to precede review. Execute serially when prior evidence is a dependency or mutable state is shared. A diff-first approach still requires reading callers, interfaces, configuration, data, and related tests, rather than only added lines.
 
-## 开放视角与分派
+## Open-Ended Review Perspectives and Assignment
 
-PM/需求、Architect/架构、QA、Product、DevOps、安全与隐私、A11y、许可与数据合规、性能、i18n 只是非穷尽示例，不是默认全选、完整分类或范围上限。按业务/架构/依赖与风险新增、合并、拆分视角，写明未覆盖领域；不靠清单打满或 Agent 数量宣称充分。IMK/词库是领域专用，IPC 看架构。
+PM/requirements, Architect/architecture, QA, Product, DevOps, security and privacy, A11y, licensing and data compliance, performance, and i18n are non-exhaustive examples, not a default selection of all perspectives, a complete taxonomy, or a scope ceiling. Add, combine, or split perspectives according to business/architecture/dependencies and risk, and state uncovered areas; completing a checklist or counting Agents does not establish sufficient coverage. IMK/lexicons are domain-specific; IPC depends on the architecture.
 
-一个 Agent 可做多个相关视角，高风险可单独深审。默认人数/模型/专项路由未定，协调者在项目/任务计划中选择并记录依据；不因外部 Skill 有角色就全量调用。独立审查指与实现对话分离的上下文，不保证统计独立或客观。
+One Agent may cover several related perspectives, while high-risk areas may receive a separate in-depth review. Default headcount/models/specialist routing are unspecified; the coordinator selects them in the project/task plan and records the rationale. Do not invoke every role merely because an external Skill defines it. Independent review means a context separate from the implementation conversation; it does not guarantee statistical independence or objectivity.
 
-协调者维护任务账本、总预算和依赖。审查者只处理分配的任务，不增设角色/调用链，不递归创建团队或另开预算；发现缺口交回协调者。并行读稳定快照，验证数据按运行协议隔离；不共享可变 checkout/index/HEAD/branch 操作。
+The coordinator maintains the task ledger, total budget, and dependencies. Reviewers handle only assigned work; they do not add roles/call chains, recursively create teams, or start separate budgets. Return discovered gaps to the coordinator. Parallel reads use a stable snapshot, and validation data is isolated according to the runtime protocol; do not share mutable checkout/index/HEAD/branch operations.
 
-## 最小事实包与任务契约
+## Minimal Fact Package and Assignment Contract
 
-给每位审查者：原始需求和验收、base/head/工作区摘要与 diff、受信约束、实际代码及影响上下文访问、已有运行证据/局限、本次任务。实现者总结仅作导航，不是唯一事实来源；不继承作者整段对话作为审查上下文，不丢失原始事实访问。
+Give each reviewer the original requirement and acceptance criteria, base/head/workspace digests and diff, trusted constraints, access to actual code and impact context, existing runtime evidence/limitations, and the current assignment. The implementer's summary is navigation, not the sole source of facts; do not inherit the author's entire conversation as review context, and do not lose access to original facts.
 
-任务写明职责/问题域、输入与身份、判据、要求的证据、非目标、允许动作/环境、依赖和预算、返回格式。规范发现引用具体规则；用户合理预期只能作为待核查假设，不能自动扩需求。不把设计原则机械变成必须套用的模式。
+State the responsibility/problem domain, inputs and identities, criteria, required evidence, non-goals, permitted actions/environments, dependencies and budget, and return format in the assignment. Findings about standards must cite specific rules; reasonable user expectations are only hypotheses to check and cannot automatically expand requirements. Do not mechanically turn design principles into mandatory patterns.
 
-首轮可先独立分析同一事实包，再归并发现与反证；不提前用他人结论替代本角色核验。允许零发现，报告实际读过/验证过的范围和局限，不为凑报告或固定意见数造问题。保留原始分视角输出，另作统一核验，不把去重包装成所有人一致。
+In the first round, reviewers may independently analyze the same fact package before consolidating findings and rebuttals; do not substitute others' conclusions for verification from the assigned perspective in advance. Zero findings are valid. Report the scope actually read/verified and its limitations, without inventing issues to fill a report or meet a fixed comment count. Retain original outputs by review perspective and verify them together separately; do not present deduplication as unanimous agreement.
 
-## 能力降级
+## Capability Fallbacks
 
-- 能隔离但不能并行：顺序执行并标记 isolated_context，不宣称并行。
-- 仅能自查：标记 same_context_self_check；若独立上下文为必需，该项 BLOCKED，不能冒名通过。
-- 模型/工具不可用：完成可独立执行的检查，相关必需项保留未完成。替代能力需策略认可、身份如实、授权不扩大。
-- 上下文不足：按依赖风险分块、记录未读范围；关键范围没覆盖则不建议就绪。模型 fallback 不能越过能力、接收方、地域或秘密边界。
+- Isolation is possible but parallelism is not: execute serially and mark isolated_context; do not claim parallel execution.
+- Only self-checking is possible: mark same_context_self_check; if an independent context is required, the item is BLOCKED and cannot pass under a false label.
+- A model/tool is unavailable: complete checks that can run independently and leave related required items incomplete. A substitute capability needs policy acceptance, truthful identity, and no expansion of authorization.
+- Context is insufficient: split work by dependency risk and record unread scope; do not recommend readiness when key scope is uncovered. Model fallback must not cross capability, recipient, geographic, or secret boundaries.
 
-任务结束按 [记录模板](record-template.md) 返回发现/疑点/零发现、证据、未覆盖项及使用预算；发现需要核验时读 [核验与复验](recheck.md)。
+At assignment completion, use the [record template](record-template.md) to return findings/questions/zero findings, evidence, uncovered items, and budget used; read [verification and rechecks](recheck.md) when findings need verification.

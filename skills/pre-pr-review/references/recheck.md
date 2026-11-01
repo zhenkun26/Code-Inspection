@@ -1,23 +1,23 @@
-# 发现核验、修复与复验
+# Finding Verification, Repair, and Rechecks
 
-先回到原始需求、实际版本和证据，区分确认事实、待核实疑点、意图分歧。能在授权内复现则执行真实原路径；不能运行时说明静态论证及缺口，不编造结果。高风险未知可阻断，不能以不确定为由直接忽略或认定漏洞。
+Return first to the original requirement, actual version, and evidence, distinguishing confirmed facts, questions to verify, and disagreements about intent. If reproduction is possible within authorization, execute the actual original path; if execution is unavailable, explain the static reasoning and gaps without fabricating results. High-risk uncertainty may block advancement; uncertainty is no basis for either ignoring an issue outright or declaring a vulnerability.
 
-对同一触发/影响去重并保留稳定 ID、各视角原始证据和不同意见；仅位置相同不必是同一问题。新触发、新版本或反证可重开并说明依据。实现者可提交反证，核对后记录撤销/保留/暂缓/升级理由，不多数票裁决。无法解开的关键争议交给有权人员。修复/采纳不自动证明真阳性，拒绝不自动证明误报。
+Deduplicate the same trigger/impact while retaining stable IDs, original evidence from each review perspective, and disagreements; the same location does not necessarily mean the same issue. A new trigger, version, or rebuttal may reopen an issue with a stated basis. Implementers may submit rebuttals; after checking them, record reasons for withdrawal/retention/deferral/escalation rather than deciding by majority vote. Refer unresolved key disputes to an authorized person. Repair/acceptance does not automatically prove a true positive, and rejection does not automatically prove a false positive.
 
-审查者不自行修复或 checkout/revert 获得红绿证据。由主/指定实现 Agent 在 repair 授权内统一修改，记录发现 ID、实际差异、addressed/not addressed 及依据；不能扩大范围、降低断言、削弱规则或跳过必需项。未授权修复时交付证据与建议，仍可执行已有授权的核验。
+Reviewers do not make repairs themselves or use checkout/revert to obtain red/green evidence. The main/designated implementation Agent makes the changes within repair authorization, recording finding IDs, actual diffs, addressed/not addressed, and the basis; do not expand scope, weaken assertions or rules, or skip required items. If repairs are unauthorized, deliver evidence and recommendations; already authorized verification may still proceed.
 
-适用时通过需求派生的行为测试取得修前失败/修后通过；判据不抄实现。修前证据无法取得就记录原因，不伪造；必要的临时诊断也记录身份，按计划撤回并核对最终版本。轻量诊断/TDD 只服务当前问题，不强制多假设/最小化/压力测试的完整开发流程。
+Where applicable, use behavior tests derived from requirements to obtain failure-before-repair/pass-after-repair evidence; do not copy criteria from the implementation. If pre-repair evidence cannot be obtained, record why rather than fabricating it. Also record the identity of necessary temporary diagnostics, remove them according to plan, and check the final version. Lightweight diagnostics/TDD serve only the current issue; a full development process involving multiple hypotheses/minimization/stress testing is not mandatory.
 
-修后重跑原触发路径及受影响的行为/旅程/回归，并使受影响旧证据失效。接口、状态、权限、依赖、基线或范围变化时扩大复验；diff-only 仍读影响上下文。保留无关且仍有效证据，不能只关闭发现就宣布整版本满足。新回归和重要新证据仍可阻断。
+After repair, rerun the original trigger path and affected behaviors/journeys/regressions, and invalidate affected old evidence. Broaden rechecks when interfaces, state, permissions, dependencies, baselines, or scope change; even a diff-only review must read impact context. Retain unrelated evidence that remains valid; closing findings alone cannot establish that the entire version meets requirements. New regressions and significant new evidence may still block advancement.
 
-## 统一预算与停止
+## Shared Budget and Stopping
 
-协调者记录跨验证、审查、核验、复验的任务总预算及每次消耗。项目人数/模型、时间/调用/费用没有占位默认；缺关键预算/策略时只读评估或先提出计划，不虚报就绪。可承接总架构**试点最多 3 轮**，注明为试点上限及依据，不用外部流程的 5 轮替换，不代表其他预算已获批准。
+The coordinator records the total task budget across validation, review, verification, and rechecks, and each expenditure. Project headcount/models and time/call/cost limits have no placeholder defaults; when key budget/policy is missing, perform a read-only assessment or propose a plan first, without falsely reporting readiness. The overall architecture's **pilot maximum of 3 rounds** may be carried forward, identified as the pilot limit with its basis; do not replace it with an external process's 5 rounds or imply that other budgets are approved.
 
-预算计划同时注明计量单位和范围（例如外层工具调用、内部命令或检查项）；批量工具内的子项也披露，不能用一次外层调用隐藏实际工作量。若口径不明且可能越限，先停止扩大执行、报告歧义并补计划；不能事后挑宽松口径宣称无条件合规。
+The budget plan must state both the unit and scope of measurement, such as outer tool calls, internal commands, or check items. Disclose subitems within batch tools as well; one outer call must not hide actual work. If the counting basis is unclear and a limit might be exceeded, stop expanding execution, report the ambiguity, and complete the plan first; do not select a permissive basis after the fact to claim unconditional compliance.
 
-一轮是对固定版本发起审查并归并证据；无修复、零发现或已发起但受阻的尝试也计轮，同版本并行视角属于同一轮，修复后新版本复审计下一轮。启动前规划不计轮；补证据计实际调用，不能把重新审查改名成补充来规避轮数。
+A round starts a review of a fixed version and consolidates evidence; attempts with no repairs, zero findings, or a review that was started but blocked still count as rounds. Parallel perspectives on the same version belong to one round, while reviewing a new version after repair counts as the next. Planning before the start does not count as a round; supplementary evidence counts actual calls, and a new review must not be relabeled as a supplement to evade round counts.
 
-到限、重复振荡、超授权/范围、方向错误或关键争议未解时停止自动循环，输出现有证据、未解项、停止原因及补能力/缩范围/转人的建议。达到上限不通过、不自动 parking 阻断缺陷继续、不删除证据目录或重置账本。继续需适用真实授权/计划调整，宿主更严格限制仍优先。
+Stop automatic loops upon reaching a limit, repeated oscillation, exceeding authorization/scope, a wrong direction, or unresolved key disputes. Output existing evidence, unresolved items, the stopping reason, and recommendations to add capabilities, narrow scope, or hand off to a person. Reaching the limit does not mean passing; do not automatically park blocking defects and continue, delete evidence directories, or reset the ledger. Continuing requires applicable actual authorization/plan adjustments; stricter host limits still take precedence.
 
-最后按 [核心契约](contract.md) 选择 READY_FOR_NEXT/HOLD/REPLAN。版本或必需证据不成立时不能用“所有审查者满意”替代。把批准和阶段建议分开，不自动执行后续生命周期动作。
+Finally, select READY_FOR_NEXT/HOLD/REPLAN under the [core contract](contract.md). If the version or required evidence is not established, "all reviewers are satisfied" cannot substitute for it. Keep approval separate from the stage recommendation, and do not automatically execute later lifecycle actions.

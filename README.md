@@ -1,6 +1,6 @@
 # Code-Inspection
 
-**English** · [简体中文](README-zh.md)
+**English** · [Chinese](README-zh.md)
 
 A model-agnostic, evidence-based code-review Skill for your existing agent host. Inspired by [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/) and everyday review practice. Independent and unofficial; not affiliated with or endorsed by Anthropic.
 
@@ -23,7 +23,7 @@ Ask an existing agent host that can read local files:
 
 > Read `skills/pre-pr-review/SKILL.md`. Review my specified project and local changes against the original requirements and acceptance criteria. Start read-only. Use only granted verification/repair permissions. Report the actual version, evidence, findings, unresolved gaps and next-stage recommendation.
 
-Supply the target, original requirement, acceptance criteria, trusted policy, permitted actions and task budget. Relevant staged, unstaged and untracked changes are included. No global Skill installation is required. For Codex, the repo-local `code-inspection` entry routes to the existing stage Skills; see [setup and explicit-load fallback](docs/codex-setup.md). Earlier discovery/routing feedback is historical and does not validate this copy. Host discovery/loading, installation into another project and cancellation/resumption are unverified for this snapshot. Detailed protocols currently use Simplified Chinese.
+Supply the target, original requirement, acceptance criteria, trusted policy, permitted actions and task budget. Relevant staged, unstaged and untracked changes are included. No global Skill installation is required. For Codex, the repo-local `code-inspection` entry routes to the existing stage Skills; see [setup and explicit-load fallback](docs/codex-setup.md). Earlier discovery/routing feedback is historical and does not validate this copy. Host discovery/loading, installation into another project and cancellation/resumption are unverified for this snapshot. Reader-facing protocols and interface documentation are in English; the Chinese README is available above.
 
 ## What is implemented
 
@@ -80,7 +80,7 @@ CI total ceilings are 15 minutes for Ubuntu and 50 minutes for Windows, sized fr
 
 The host protects trusted policy, authority and ledger directories. Reviewed content and logs cannot grant permissions; JSON actor names and hashes are not authentication or a sandbox. Required missing/stale/partial evidence remains an explicit gap. READY_FOR_NEXT does not authorize merge or release. See the shared [core contract](skills/pre-pr-review/references/contract.md).
 
-Stored merge/delivery plans and receipts are checked for exact intent and object/state consistency before execution or recovery. Unsafe legacy records require explicit replanning or migration; see [integrity and recovery compatibility](interfaces/lifecycle/README.md#计划完整性与恢复兼容性). These checks do not protect against a malicious writer controlling the trusted policy and approval store.
+Stored merge/delivery plans and receipts are checked for exact intent and object/state consistency before execution or recovery. Unsafe legacy records require explicit replanning or migration; see [integrity and recovery compatibility](interfaces/lifecycle/README.md#plan-integrity-and-recovery-compatibility). These checks do not protect against a malicious writer controlling the trusted policy and approval store.
 
 Check results retain optional failures separately from blocking decisions. N_A requires a current, scoped host applicability record; a legacy reason alone becomes UNKNOWN. CLI budget reports separate existing ledger capacity, observed work in this invocation and unknown external costs. Capacity is not authorization, and safe receipt queries remain available after exhaustion. See the [record and accounting contract](interfaces/lifecycle/README.md).
 

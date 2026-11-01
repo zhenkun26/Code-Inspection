@@ -1,70 +1,70 @@
-# 可选安全工具结果接口 v1
+# Optional Security-Tool Result Interface v1
 
-A 为默认：宿主已有 Agent 按受信需求、风险、代码和证据进行审查，不新增必需运行依赖。B 是本目录的**只读结果接口**，用户可不接，也可自行把已获授权工具的实际输出转换成下述记录。它不安装、登录、启动扫描器、执行命令配置、访问网络或发布评论。C 专用服务未接入。
+A is the default: the host's existing Agent reviews trusted requirements, risk, code, and evidence, without adding a required runtime dependency. B is the **read-only result interface** in this directory. Users may leave it disconnected or convert actual output from already-authorized tools into the records below themselves. It does not install, log in, launch scanners, execute command configuration, access the network, or publish comments. C, a dedicated service, is not integrated.
 
-接口实现使用 Python 3.9+ 标准库，以及 [受控文件读取辅助模块](../../support/local_files.py)。需平台支持 `dir_fd`、`O_NOFOLLOW`、`O_DIRECTORY`；不支持时拒绝，不能假称已安全读取。Git 不是 B 的要求；本项目 Git fixture 验证另需 Git。所有示例均自有合成记录，不是真实扫描结果，也没有检出率证明。
+The implementation uses the Python 3.9+ standard library and the [controlled file-reading helper](../../support/local_files.py). The platform must support `dir_fd`, `O_NOFOLLOW`, and `O_DIRECTORY`; otherwise it rejects the operation rather than claiming a safe read. Git is not required by B; this project's Git-fixture validation additionally requires Git. All examples are project-owned synthetic records, not real scan results or proof of detection rates.
 
-## 接入步骤
+## Integration Steps
 
-1. 用户/宿主指定受信政策及请求文件，记录来源和摘要；不可让被审 PR 自选信任政策。确定所需覆盖、时间窗口、工具版本/配置、源码与工作区/CI/产物身份，以及允许的数据接收方。配置选择不能由工具自行降级。
-2. 用户可提交现有工具输出，或宿主在明确权限内执行现有工具。任何执行仍受宿主授权；本接口不执行任意 `command`、hook 或 shell 配置。工具原始退出码保留，不因为某工具以非零表示发现就伪装为零。
-3. 手工或自有受信 adapter 转换为 `security-result/v1`，保留原始输出及 SHA-256。转换者必须理解对应工具版本的字段和覆盖；本目录没有声称原生支持任何厂商格式。Gitleaks、Semgrep、OSV 仅是未来可能来源，不是必装依赖。
-4. 将必要、已按授权筛选的证据放入专用本地根目录；使用相对路径。只调用下列只读规范化命令；不要先执行来源中的命令。
+1. The user/host specifies trusted policy and request files, recording their sources and digests; the PR under review must not choose its own trust policy. Determine required coverage, time window, tool version/configuration, source and worktree/CI/artifact identities, and permitted data recipients. Tools cannot downgrade configuration choices themselves.
+2. The user may submit existing tool output, or the host may run existing tools within explicit permissions. Any execution remains subject to host authorization; this interface does not execute arbitrary `command`, hook, or shell configuration. Preserve the tool's original exit code; do not disguise it as zero merely because a tool uses nonzero to indicate findings.
+3. Convert manually or with a project-owned trusted adapter to `security-result/v1`, retaining the raw output and SHA-256. The converter must understand the fields and coverage of that tool version; this directory claims no native support for any vendor format. Gitleaks, Semgrep, and OSV are only possible future sources, not required dependencies.
+4. Place necessary evidence, filtered according to authorization, in a dedicated local root directory using relative paths. Call only the read-only normalization command below; do not first execute commands from the source.
 
-从项目根目录试读自有示例：
+Read the project's own example from the project root:
 
 ```sh
 python3 -B interfaces/security-tools/normalize_result.py --root interfaces/security-tools/examples --request request.json --result result.json
 ```
 
-省略 `--result` 可真实检查未配置情形。修改/复制示例为真实任务时，重新指定真实政策、时间、身份、工具和证据；不能把示例中的 `fixture-*` 标识当真实项目证据。示例宽时间窗口只方便演示，不是推荐生产保鲜策略；到期应返回 UNKNOWN。
+Omit `--result` to actually check the unconfigured case. When modifying/copying examples for a real task, specify the real policy, time, identities, tool, and evidence again; the example's `fixture-*` identifiers cannot serve as real project evidence. Its broad time window only makes demonstration easier and is not a recommended production freshness policy; expiration should return UNKNOWN.
 
-## 请求契约
+## Request Contract
 
-完整机器可读示例：[request.json](examples/request.json)。全部字段必填，未知字段拒绝。
+Complete machine-readable example: [request.json](examples/request.json). All fields are required; unknown fields are rejected.
 
-| 字段 | 含义 |
+| Field | Meaning |
 | --- | --- |
-| schema / request_id | `security-request/v1` 和唯一关联 ID |
-| policy_binding | 用户/宿主指定政策来源与摘要的可追溯引用；字符串本身不证明可信 |
-| required | 本项是否为受信策略要求；不能由扫描结果改变 |
-| expected_subject | base、head、worktree_digest、ci_config_digest、artifact_digest；均为实际身份。无对应对象时用带理由的明确标识，不用空值假装相同 |
-| expected_tool | name、version，精确匹配 |
-| expected_config_digest | 规则/配置的固定身份 |
-| required_scope | 必需范围标识，非空、去重；由接入者定义其真实含义，不把路径标签当覆盖证明 |
-| accepted_data_destination | 实际允许的接收方或 `none`；需单独授权，不能从“本地 CLI”推断不外发 |
-| valid_from_utc / valid_until_utc | 显式带时区窗口；结果观测时间必须落在窗口内且不晚于当前时间 |
+| schema / request_id | `security-request/v1` and a unique correlation ID |
+| policy_binding | Traceable reference to the policy source and digest specified by the user/host; the string itself does not establish trust |
+| required | Whether trusted policy requires this item; scan results cannot change it |
+| expected_subject | base, head, worktree_digest, ci_config_digest, artifact_digest; all are actual identities. When no corresponding object exists, use an explicit identifier with a reason, not empty values that pretend to match |
+| expected_tool | name, version, matched exactly |
+| expected_config_digest | Fixed identity of rules/configuration |
+| required_scope | Required scope identifiers, nonempty and deduplicated; the integrator defines their actual meaning, without treating path labels as proof of coverage |
+| accepted_data_destination | Actually permitted recipient or `none`; requires separate authorization, and “local CLI” does not imply no outbound transfer |
+| valid_from_utc / valid_until_utc | Explicit timezone-aware window; the result observation time must fall within it and must not be later than the current time |
 
-## 结果契约
+## Result Contract
 
-完整示例：[result.json](examples/result.json)、[原始合成证据](examples/raw.txt)。全部顶层字段必填：
+Complete examples: [result.json](examples/result.json), [raw synthetic evidence](examples/raw.txt). All top-level fields are required:
 
-- `schema=security-result/v1`、request_id、subject、tool、config_digest、scope、complete。
-- `execution={outcome,exit_code}`：outcome 为 completed/not_run/blocked/timeout/error/unknown；exit_code 保留原值或未知时 null。超时可以由宿主记录，本接口没有启动器或超时执行器。
-- `findings`：每项 id、location、trigger、impact、evidence_ref、tool_severity。规范化后始终是 candidate/unreviewed，不直接升级为确认漏洞，也不把工具严重度等同本项目风险。
-- `raw_evidence`：相对 path 与 sha256，关联本根下可读常规文件；单文件最多 1 MiB。超过限额应报告能力缺口，另行受控保存/选择明确裁剪证据并披露影响，不静默截断。
-- `data_destination`，`license={identifier,source,review_state}`，`observed_at_utc`。review_state 只能 reviewed/unknown；许可未知不能假装已核验。这里不替用户选择项目许可证，也不替第三方许可提供法律保证。
+- `schema=security-result/v1`, request_id, subject, tool, config_digest, scope, complete.
+- `execution={outcome,exit_code}`: outcome is completed/not_run/blocked/timeout/error/unknown; exit_code retains its original value, or null when unknown. The host can record timeouts; this interface has no launcher or timeout executor.
+- `findings`: each item has id, location, trigger, impact, evidence_ref, tool_severity. After normalization they are always candidate/unreviewed, without direct promotion to confirmed vulnerabilities or equating tool severity with this project's risk.
+- `raw_evidence`: relative path and sha256, referring to a readable regular file under this root; each file is limited to 1 MiB. Exceeding the limit should be reported as a capability gap, with separate controlled storage/selection of explicitly trimmed evidence and disclosure of the impact, never silent truncation.
+- `data_destination`, `license={identifier,source,review_state}`, `observed_at_utc`. review_state can only be reviewed/unknown; unknown licensing must not be presented as verified. This interface neither selects the user's project license nor provides legal guarantees for third-party licenses.
 
-subject/tool/config/数据接收方须精确一致；scope 须覆盖 required_scope；complete 必须真实反映工具及 adapter 是否完整。发现引用必须指向已校验原始证据。额外字段、重复 JSON 键、非有限数、越界/绝对路径、根及根内符号链接、非常规文件、坏摘要均拒绝。调用者指定的根的上级路径由宿主负责；本模块不是文件系统沙箱。
+subject/tool/config/data recipient must match exactly; scope must cover required_scope; complete must truthfully reflect whether the tool and adapter are complete. Finding references must point to verified raw evidence. Extra fields, duplicate JSON keys, nonfinite numbers, out-of-bounds/absolute paths, symlinks at the root or within it, nonregular files, and invalid digests are rejected. The host is responsible for the parent paths of the caller-specified root; this module is not a filesystem sandbox.
 
-## 输出和门禁语义
+## Output and Gate Semantics
 
-返回 `security-evidence/v1`，保留完整 `request_binding`（含政策、required、范围、配置和时间窗口）、`config_digest` 及实际解析的请求/结果字节路径与 SHA-256 `input_records`，便于独立保存后回溯。绑定引用本身仍不证明来源可信。始终 `authorizes_progress=false`。CLI 退出 0 只表示产生了规范记录，不代表通过；退出 2 为不安全/无效/不可读输入，输出 UNKNOWN。消费端必须读取 status/reasons，不能把退出 0 当绿灯。
+The interface returns `security-evidence/v1`, preserving the complete `request_binding` (including policy, required, scope, configuration, and time window), `config_digest`, and the paths and SHA-256 of the request/result bytes actually parsed as `input_records`, so independently saved records can be traced later. Binding references still do not establish source trust. `authorizes_progress=false` always. CLI exit 0 means only that a normalized record was produced, not that the check passed; exit 2 means unsafe/invalid/unreadable input, with UNKNOWN output. Consumers must read status/reasons and must not treat exit 0 as clearance.
 
-| 输入 | 规范化状态 |
+| Input | Normalized status |
 | --- | --- |
-| 未配置，required=true / false | BLOCKED / NOT_RUN；A 仍能继续已授权工作 |
-| 明确未跑 / 被阻且其他身份可靠 | NOT_RUN / BLOCKED |
-| 错误、超时、未知、非零退出、过期、身份/版本/配置不符、覆盖不足、不完整、许可未知 | UNKNOWN，并列原因；不伪装无发现 |
-| 有候选发现 | UNKNOWN，待核验；候选不是确认漏洞 |
-| 同身份、配置、版本、完整覆盖、有效原始证据、退出 0 且无候选 | PASS，仅该工具声明范围证据，不是全项目安全或阶段放行 |
+| Unconfigured, required=true / false | BLOCKED / NOT_RUN; A can still continue authorized work |
+| Explicitly not run / blocked, with other identities reliable | NOT_RUN / BLOCKED |
+| Error, timeout, unknown, nonzero exit, expiration, identity/version/configuration mismatch, insufficient coverage, incompleteness, unknown licensing | UNKNOWN, with reasons listed; does not pretend that there are no findings |
+| Candidate findings exist | UNKNOWN, pending verification; candidates are not confirmed vulnerabilities |
+| Matching identity, configuration, and version, complete coverage, valid raw evidence, exit 0, and no candidates | PASS, evidence only for that tool's declared scope, not project-wide security or stage clearance |
 
-若未跑/被阻记录同时身份错误，优先 UNKNOWN，因为无法可靠关联该任务。确认违反验收的发现由协调者依事实给 FAIL；N_A 由受信策略和真实适用性决定，接口不自动产生 FAIL/N_A。任何必需覆盖缺失仍阻断阶段建议，不能因为 B 可选就把必需安全能力变可选。
+If a not-run/blocked record also has an incorrect identity, UNKNOWN takes precedence because it cannot be reliably associated with the task. The coordinator assigns FAIL according to the facts for findings confirmed to violate acceptance criteria; N_A is determined by trusted policy and actual applicability, and the interface does not automatically produce FAIL/N_A. Missing required coverage still blocks the stage recommendation; optional B does not make required security capabilities optional.
 
-## 数据与分发边界
+## Data and Distribution Boundaries
 
-哈希能检出内容变化，不能证明工具真的运行、报告来源可靠或工具有效。此接口校验自报版本/外发字段，不能监控真实网络、认证扫描者或阻止伪造。日志内容仍是不受信数据；先按授权筛选和脱敏，再交给模型。代码未设置硬沙箱、硬预算或托管服务。
+Hashes detect content changes; they do not prove that a tool actually ran, that the report source is reliable, or that the tool is effective. This interface validates self-reported version/outbound-transfer fields, but cannot monitor actual network traffic, authenticate scanners, or prevent forgery. Log contents remain untrusted data; filter and redact them according to authorization before passing them to a model. The code establishes no hard sandbox, hard budget, or hosted service.
 
-发布本可选接口仅需本目录实现/说明/自有示例及 `support/local_files.py`。私人 reference 原文/图片/HTML、上传稿、原始任务日志和历史验证证据不默认分发；用户现已选择对有权许可的原创项目内容采用 [MIT](../../LICENSE)，不以依赖的许可证代替项目授权；第三方材料边界见 [许可盘点](../../docs/sources.md)。示例的 `self-owned-test-data` 只是材料身份标签，不是新授予的许可证。
+Distributing this optional interface requires only this directory's implementation/documentation/project-owned examples and `support/local_files.py`. Private reference originals/images/HTML, uploaded drafts, raw task logs, and historical validation evidence are not distributed by default. The user has selected [MIT](../../LICENSE) for original project content they are authorized to license; dependency licenses do not substitute for project authorization. See the [license inventory](../../docs/sources.md) for third-party material boundaries. The examples' `self-owned-test-data` is only a material-identity label, not a newly granted license.
 
-有界测试位于 [test_interface.py](../../validation/security-integration/test_interface.py)，验证接口一致性和拒绝边界；不代表真实扫描器效果、外发限制或 GUI 验收。
+Bounded tests in [test_interface.py](../../validation/security-integration/test_interface.py) verify interface consistency and rejection boundaries; they do not establish real-scanner effectiveness, outbound-transfer restrictions, or GUI acceptance.

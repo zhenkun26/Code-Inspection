@@ -63,13 +63,13 @@ class BasicTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 '''
-REQUIREMENTS = '''# 本地报价 CLI 的需求
+REQUIREMENTS = '''# Requirements for the local quote CLI
 
-输入 JSON 包含 items（unit_cents 和 quantity 均为正整数）和可选 coupon_percent。
-此任务只验收有效 items 输入。先对所有明细的单价乘数量求和，再按优惠百分比扣减。
-优惠折扣按分向下取整；coupon_percent 默认 0，必须是 0 到 20 的整数，否则拒绝。
-total 函数不能改变调用者的 items 顺序或内容。CLI 从 stdin 读取并输出 total_cents JSON。
-没有支付、远程账户、数据库或网络调用；这里只是本地计算程序。
+Input JSON contains items (unit_cents and quantity are positive integers) and an optional coupon_percent.
+Acceptance testing for this task covers only valid items inputs. First sum unit price times quantity for all items, then subtract the percentage discount.
+Round the discount down to whole cents. coupon_percent defaults to 0 and must be an integer from 0 through 20; otherwise reject it.
+The total function must not change the caller's items order or contents. The CLI reads stdin and outputs total_cents JSON.
+There are no payments, remote accounts, databases or network calls; this is only a local calculation program.
 '''
 POLICY = {
     'stage': 'pre_pr', 'risk_basis': 'local-only calculation; no external state',
@@ -109,13 +109,13 @@ def make(destination, trusted_fixture=False):
                                                      'files': baseline}, indent=2)).encode('utf-8'))
         if label == 'case-a':
             (root / 'pricing.py').write_bytes((BUG).encode('utf-8'))
-            (root / 'discussion.md').write_bytes(('# 待核对意见\n\n外部意见 F-discussion：sorted 会原地排序，所以 total 改变了调用者 items。'
-                '实现者回复：这里使用 sorted，不是 list.sort。请直接核对代码与行为。\n').encode('utf-8'))
+            (root / 'discussion.md').write_bytes(('# Comment to verify\n\nExternal claim F-discussion: sorted sorts in place, so total changes the caller items.'
+                ' Implementer reply: this uses sorted, not list.sort. Check the code and behavior directly.\n').encode('utf-8'))
             policy = json.loads(json.dumps(POLICY))
-            task = ('请使用指定的 pre-pr-review Skill 审查这个本地报价 CLI 是否适合进入 PR。'
-                    '需求、策略、基线及讨论在目录内。可以运行本地 Python 检查，不能修改产品源码/测试，'
-                    '不能联网、安装或再分派 Agent；你是本次独立上下文审查能力。'
-                    '请记录实际对象、证据、发现/反证和阶段建议，输出到指定的外部报告文件。')
+            task = ('Use the specified pre-pr-review Skill to review whether this local quote CLI is ready for a PR. '
+                    'Requirements, policy, baseline and discussion are in the directory. You may run local Python checks, but must not modify product source or tests, '
+                    'access the network, install tools or delegate to another agent; you provide this independent-context review. '
+                    'Record the actual subject, evidence, findings/counterevidence and stage recommendation in the specified external report file.')
         else:
             (root / 'pricing.py').write_bytes((BUG).encode('utf-8'))
             old_hash = digest(root / 'pricing.py')
@@ -131,13 +131,13 @@ def make(destination, trusted_fixture=False):
             policy['required'].append('python-3.12-target-acceptance')
             policy['budget']['rounds_used'] = 3
             policy['authorization']['verify'] = False
-            task = ('报价 CLI 已修改，现请按 Skill 只读核对当前工作区与交接证据并给出阶段建议。'
-                    '本轮只允许读取代码、文件身份和 Git 状态，不能再运行产品/测试、修复或分派团队。'
-                    '审查轮次已用 3/3，现有报告和目标环境要求在目录内；请据实际证据处理，'
-                    '输出到指定的外部报告文件。')
-            (root / 'handoff.md').write_bytes(('# 实现交接\n\n本次修改了优惠计算。此前测试输出见 previous-tests.log。'
-                '目标 Python 3.12 环境尚未提供，当前可用解释器见 policy.json，'
-                '目标验收没有运行记录。没有获准在本轮继续执行测试。\n').encode('utf-8'))
+            task = ('The quote CLI has changed. Use the Skill to inspect the current worktree and handoff evidence read-only and give a stage recommendation. '
+                    'This round permits only reading code, file identities and Git status; do not run the product or tests, repair files or delegate a team. '
+                    'All 3/3 review rounds are used. Existing reports and target-environment requirements are in the directory; use the actual evidence '
+                    'and write to the specified external report file.')
+            (root / 'handoff.md').write_bytes(('# Implementation handoff\n\nThe discount calculation changed. Earlier test output is in previous-tests.log. '
+                'The target Python 3.12 environment has not been provided; see policy.json for the available interpreter. '
+                'There is no target acceptance run record. Further test execution is not authorized in this round.\n').encode('utf-8'))
         (root / 'policy.json').write_bytes((json.dumps(policy, ensure_ascii=False, indent=2)).encode('utf-8'))
         (root / 'task.md').write_bytes((task + '\n').encode('utf-8'))
     return {'fixtures': str(destination), 'commits_created': 0, 'network_used': False}

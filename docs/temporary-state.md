@@ -1,6 +1,5 @@
-# Temporary-state inspection / 临时状态检查
+# Temporary-state inspection
 
-## English
 
 `save()` normally removes only its own temporary file. A forced exit, SIGKILL or power loss can bypass `finally`, leaving a `.lifecycle-*` file. The file may contain an incomplete or uncommitted ledger or simulated-provider state. Its presence is not an action receipt, and its contents must not be adopted as the current ledger.
 
@@ -53,33 +52,3 @@ Recovery validates the exact selected record and payload under the lock, with bo
 **POSIX boundary:** descriptor-relative operations and rechecks do not provide atomic “unlink this inode only” protection against a nonparticipating writer replacing a name between verification and unlink. The explicit trusted-namespace precondition is therefore mandatory; without it or without the exact cleanup grant, no deletion is authorized. Never present these tests as proof of safety against a hostile same-host writer. SIGKILL cannot run `finally`; cleanup happens only on a later explicit safe recovery attempt, and some early/uncertain residues remain.
 
 **Windows boundary:** the new managed write/recovery capability fails closed. The existing Windows reader/lock is not an identity-bound deletion backend. Native managed recovery is not implemented; the separate [Windows API experiment](windows-temporary-qualification.md) observes system calls but does not qualify product recovery or power-loss persistence; legacy save and metadata-only `temp-report` remain unchanged. Do not interpret skipped POSIX cases as Windows cleanup acceptance. No current user residue is removed by adopting this version.
-
-## 简体中文
-
-`save()` 只在普通退出时清理本次创建的临时文件。强制退出、SIGKILL 或断电可能跳过 `finally`，留下 `.lifecycle-*`。其中可能是未完成或未提交的账本/模拟 provider 状态，不能当作成功回执或覆盖当前账本。
-
-以上 `temp-report` 命令需要用户/宿主明确选择可信根与政策 SHA256；不需要 Git、模型、服务或新依赖。它先持有既有宿主锁，再核对有界读取的原始 `policy.json`，返回前复核政策；不解析 `state.json`，因此账本损坏或缺失仍可检查。锁文件可能因同步需要被创建，账本、预算、批准不变。
-
-仅检查根目录直属条目的元数据，不跟随链接，不读/hash 残留内容，不递归、删除、重命名、采用旧状态或重放动作。最多检查 1,024 个条目、报告 64 个匹配项；检测上限可能多取得一个迭代器条目。达到上限或条目元数据不可用时为 `complete: false` / UNKNOWN；扫描、政策或锁失败则退出码 2 / UNKNOWN / HOLD。有残留时即使枚举完整仍为 UNKNOWN；完整且为空的 PASS 只表示本次有界观察，不是阶段放行或持久性证明。成功交付报告的退出码 0 不代表报告状态 PASS。
-
-硬链接数不可用时（包括 Windows 目录条目元数据）记录为 `null`，不误称单链接或硬链接。JSON 转义异常文件名码点以保留身份并输出有效 UTF-8。
-
-所有匹配项都标记归属 UNKNOWN、动作 RETAIN。名称、PID、时间和文件内容均不足以证明归属或不活跃；锁只约束遵循该锁的写入者。POSIX 使用目录描述符枚举，Windows 在已检查根及锁内按路径观察元数据，均不保证对非协作写入者的原子快照（`atomic_snapshot: false`）。宿主仍须保护根及其父路径。报告可能含本地文件名/大小，应留在私人环境。
-
-本接口不是预算报告，也不解除保存结果不确定状态。保留当前账本与批准，按既有精确操作的 query/恢复协议确认动作，不能将残留覆盖到账本或据此判定成功。
-
-**默认检查仍不删除。** 历史匿名残留没有可验证归属，继续保留。下述可选接口只适用于新登记资源，不迁移旧文件、不按前缀清扫、不运行守护服务，也不依据 PID 或年龄判定归属。
-
-### 可选受控资源（可信宿主，仅 POSIX）
-
-[受控临时资源接口](../interfaces/lifecycle/owned_temporary.py)与 `temp-report` 分开。宿主必须明确保证所选根及祖先目录受保护，且**所有写入者都遵循同一宿主锁**；这是接入前提，不是 JSON、命令行确认或文件权限检查可以证明的事实。被审记录不能启用能力，有无关写入者的目录不能启用。必须提供可信的规范绝对路径；含符号链接的祖先路径会拒绝，不静默解析别名（例如 macOS 应由宿主选定真实规范路径）。
-
-用上方 Python 示例创建 `ManagedTemporaryNamespace(..., exclusive_namespace=True)`，作为 `Session(..., temporary_namespace=namespace)` 的可信宿主参数，再使用已有 `session.locked()` 执行已经授权的生命周期操作。恢复另行在 `namespace.locked()` 内调用 `selected.recover(owner_record_name, authorize=True)`，只授权一个明确的归属记录；没有删除 CLI、后台任务或全局安装。默认 Session/三参数 `save()` 保持旧路径，不自动登记或迁移历史残留。新受控目标文件名以 ASCII 字母或数字开头，其余仅限 ASCII 字母、数字、点、下划线和连字符；宿主目录仍可含 Unicode。政策、锁及资源保留名不依赖文件系统大小写敏感性判断，并在暂存写入前核对既有政策/锁的真实身份，防止别名覆盖。
-
-受控路径固定 POSIX 目录描述符，核验普通单链接锁文件，从创建到登记、发布及普通清理持续持锁。恢复必须由新进程实际取得锁；存活子进程或其他持有者仍可能阻断。PID 复用、重启时间、文件年龄均不是不活跃证据。宿主还需验证文件系统的锁与 fsync 语义，本地测试不认证所有 POSIX 或网络文件系统。仅新独占创建、写完并 fsync 的 payload 才能取得有界版本化登记，绑定政策摘要、根身份、随机暂存名、目标名、真实文件身份/元数据、长度和摘要。这不是构建来源认证、业务回执，也不能对控制可信根的恶意写入者提供密码学归属保证。登记前退出、登记损坏、不完整、不一致或核验期间变化时，未知残留仍保留。有可信根写权限的代码重建自洽记录无法与真实宿主记录区分，原有信任边界仍适用。
-
-恢复只在锁内对明确记录及其 payload 做有界、不跟随链接的身份/类型/单链接/内容/政策核验；先删除符合条件的 payload，再处理登记。不会读取任意历史 payload、递归、覆盖账本、清预算或重放 provider。暂存不存在也不说明业务成功，绝不能改为删除其目标文件。失败或持久化未知不能报告成功；原 Session 保存失败隔离仍有效，业务结果需按原精确操作查询协议确认。
-
-**POSIX 限制：** dir-fd 操作与重查并不提供“仅删除这个 inode”的原子条件；非协作写入者仍可能在检查与 unlink 之间替换名字。因此排他命名空间是强制宿主前提，不满足或无明确删除授权时不得删除。不能把测试称为抵御恶意同机写入者的证明。SIGKILL 不会执行 finally；只能在后续明确的安全恢复中处理符合条件的资源，早期或不确定残留可能继续保留。
-
-**Windows 限制：** 新受控写入/恢复能力保守拒绝；现有安全读取和锁不等于同句柄删除后端。Windows 受控恢复尚未实现；单独的 [Windows API 实验](windows-temporary-qualification.md)仅观察系统调用，不证明产品恢复或掉电持久性，旧 save 与仅元数据报告不变。POSIX 用例跳过不是 Windows 清理验收，采用此版本不自动删除任何用户历史残留。
