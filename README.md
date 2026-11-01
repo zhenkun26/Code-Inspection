@@ -4,108 +4,93 @@
 
 A model-agnostic, evidence-based code-review Skill for your existing agent host. Inspired by [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/) and everyday review practice. Independent and unofficial; not affiliated with or endorsed by Anthropic.
 
-## Human steer, agent execute
-
-Humans decide whether a requirement is worthwhile, architecture, acceptable risk and acceptance. Agents perform substantial implementation, checks, investigation, evidence organization and authorized repair/recheck. This project focuses on code review; action permissions and required human decisions remain explicit.
+**Human steer, agent execute.** Humans decide requirements, architecture, acceptable risk and acceptance. Agents investigate, validate, organize evidence and perform authorized repairs. A stage recommendation never grants permission to create a PR, comment, merge or release.
 
 ## Start
 
-Get the complete repository and open it as your agent's project directory:
+Choose the smallest path that serves your task. You can use one stage without running the whole lifecycle.
+
+| Path | What you need | First step |
+| --- | --- | --- |
+| **A. Review with the Markdown Skills** | An existing agent host allowed to read the complete repository and your selected target; **no Python runtime required** | [Get the files and start a read-only review](docs/getting-started.md#1-get-the-complete-repository). |
+| **B. Try the local teaching example** | Existing Python 3.9+ (prefer tested 3.13), supported local file operations and Git with `merge-tree --write-tree` | [Run the isolated demo](docs/getting-started.md#4-optional-run-the-local-demo). No model or platform connection. |
+| **Host integration: embed optional interfaces** | A trusted host with explicit policy, evidence, authority and backend capabilities | [Plan the integration](docs/getting-started.md#5-optional-embed-the-interfaces). No bundled production provider. |
+
+For path A, get the full checkout:
 
 ```sh
 git clone https://github.com/zhenkun26/Code-Inspection.git
 cd Code-Inspection
 ```
 
-Keep the complete layout: copying only the discovery entry or a single Skill folder breaks relative references. This repository starts from a sanitized file-only snapshot; private development history, PR discussions and audit records are excluded.
+Or use the repository's **Code → Download ZIP** and extract the complete folder. Keep `.agents/`, `skills/`, `docs/`, `interfaces/` and the rest of the distribution together; copying a single entry breaks relative references. This repository starts from a sanitized file-only snapshot; private development history, PR discussions and audit records are excluded.
 
-Ask an existing agent host that can read local files:
+In your existing host, explicitly ask:
 
-> Read `skills/pre-pr-review/SKILL.md`. Review my specified project and local changes against the original requirements and acceptance criteria. Start read-only. Use only granted verification/repair permissions. Report the actual version, evidence, findings, unresolved gaps and next-stage recommendation.
+> Read `.agents/skills/code-inspection/SKILL.md` and select pre-pr review. Start with a read-only assessment of my specified target, version, original requirements, acceptance criteria and trusted policy. Use only the paths, commands, data recipients and budget I supply. Report actual reads, evidence, findings, gaps and READY_FOR_NEXT/HOLD/REPLAN.
 
-Supply the target, original requirement, acceptance criteria, trusted policy, permitted actions and task budget. Relevant staged, unstaged and untracked changes are included. No global Skill installation is required. For Codex, the repo-local `code-inspection` entry routes to the existing stage Skills; see [setup and explicit-load fallback](docs/codex-setup.md). Earlier discovery/routing feedback is historical and does not validate this copy. Host discovery/loading, installation into another project and cancellation/resumption are unverified for this snapshot. Reader-facing protocols and interface documentation are in English; the Chinese README is available above.
+Fill in the [first-review task brief and expected report](docs/getting-started.md#3-start-your-first-read-only-review). For Codex, open this checkout as the project and explicitly load the repo entry; see [host steps](docs/getting-started.md#2-load-a-stage-in-your-existing-host) and [setup/acceptance limits](docs/codex-setup.md). Other hosts can read a stage by explicit path if they support local files. No global installation is required. Automatic discovery/loading and cancellation/resumption remain unverified for this snapshot. Detailed guides and protocols are in English.
 
-## What is implemented
+## Four stages
 
-| Stage | Available capability |
-| --- | --- |
-| [Before PR](skills/pre-pr-review/SKILL.md) | Instruction Skill, five shared protocols, real-use verification and independent review when the host supports them. |
-| [During PR](skills/pr-in-review/SKILL.md) | Local record runner for version-bound evidence, finding decisions, continuous budgets and host-supplied human-decision records; optional security-result import. |
-| [At merge](skills/merge-review/SKILL.md) | Real controlled bare-Git candidate, integration evidence, expected-old conditional ref update and receipt query. Only explicitly isolated repositories and merge commits. |
-| [After merge](skills/delivery-review/SKILL.md) | Optional local simulation, plus a trusted-host deploy/rollback interface; no bundled production provider. |
-
-No native hosted-CI/SARIF result importer, identity authentication or production deployment/flag/metrics/rollback provider is included. No automatic PR creation, comments, real-project merging or deployment. Evaluation datasets and scoring are not implemented.
-
-The optional [host delivery interface](docs/host-delivery.md) accepts a policy-selected provider from trusted Python host code for deploy/rollback. Missing capability remains UNKNOWN/HOLD; the default CLI installs none. New external actions also require a policy-selected operational persistence checkpoint; an ordinary successful save or reload is not proof of power-loss durability. Conditional writes, authentication, storage guarantees and durable idempotency require actual host integration and acceptance. Other real delivery actions are unsupported.
-
-The optional [build provenance contract](docs/build-provenance.md) accepts a policy-selected verifier supplied by a trusted Python host. It binds the result to exact source/tree/configuration/artifact/run and plan intent; no external CI identity or signature verifier is bundled. Without the required capability, new actions remain UNKNOWN/HOLD. Historical recovery does not renew authentication.
-
-## Run the offline example
-
-From the checkout root:
-
-```sh
-python3 -B examples/lifecycle_demo.py --simulate-approvals --with-delivery
+```mermaid
+flowchart TD
+    PRE["1. Before PR<br/>Requirements, fixed version, checks and review"]
+    subgraph PR["2. During PR: evidence and risk decisions"]
+        CI["CI / deterministic checks"]
+        AI["Independent AI review"]
+        SEC["Security evidence"]
+        DEC["Verify findings and evidence<br/>Human requirement, risk and acceptance decisions"]
+        CI --> DEC
+        AI --> DEC
+        SEC --> DEC
+    end
+    PRE --> CI
+    PRE --> AI
+    PRE --> SEC
+    DEC --> MERGE["3. Merge review<br/>Exact combination and integration evidence<br/>Separate authority before conditional merge"]
+    MERGE -. "Optional: select and authorize" .-> DEL["4. Delivery review<br/>Artifact, bounded observation and recovery"]
 ```
 
-It retains a new external directory with commands and evidence. The tiny content check and isolated Git merge are real; review reports, person decisions and delivery are explicitly synthetic. Its PASS summary includes expected HOLD/UNKNOWN states and is not release approval. Omit `--with-delivery` to leave that stage NOT_RUN.
+PR checks and reviews may run in parallel on the same fixed snapshot when the host supports isolation and dependencies allow it. The diagram describes responsibilities, not installed services or automatic execution. Missing required evidence stays HOLD; `READY_FOR_NEXT` recommends the next stage and **never authorizes an action**. Each stage keeps the same task history and cumulative budget.
 
-- [Walkthrough, minimum configuration and troubleshooting](docs/local-walkthrough.md)
-- [Current workflow, trust boundaries and verification scope](docs/workflow.md)
-- [Lifecycle CLI and record contract](interfaces/lifecycle/README.md)
-- [Optional security-result interface](interfaces/security-tools/README.md)
-- [Support and acceptance evidence](docs/acceptance.md)
+A clean textual Git merge does not establish semantic acceptance. New logic introduced while resolving conflicts returns to review and affected checks.
+
+| Stage entry | Implemented scope |
+| --- | --- |
+| [Before PR](skills/pre-pr-review/SKILL.md) | Markdown instructions and five shared protocols; real-use verification and independent review depend on host capabilities and permission. |
+| [During PR](skills/pr-in-review/SKILL.md) | Evidence, finding dispositions and human decisions; optional local record runner and security-result import. |
+| [At merge](skills/merge-review/SKILL.md) | Real controlled bare-Git combination and conditional ref update, limited to explicitly isolated self-owned repositories and merge commits. |
+| [Optional delivery](skills/delivery-review/SKILL.md) | Local simulation; trusted-host deploy/rollback interface with no bundled production provider. |
+
+## Continue when needed
+
+- [Getting started: prerequisites, host loading, first report and FAQ](docs/getting-started.md)
+- [Local walkthrough, generated configuration and demo evidence](docs/local-walkthrough.md)
+- [Workflow, trust boundaries and responsibilities](docs/workflow.md)
+- [Lifecycle CLI and host contract](interfaces/lifecycle/README.md) · [Security-result interface](interfaces/security-tools/README.md)
+- [Verification scope](docs/acceptance.md) · [Native Windows limits](docs/windows-support.md)
 - [Sources and license scope](docs/sources.md)
 
-An explicit [temporary-state inspection](docs/temporary-state.md) reports crash residues under the host lock, without reading their contents or deleting them. It is a recovery aid, not evidence that a pending action succeeded. An opt-in trusted-host POSIX interface can recover exactly registered new resources under an exclusive cooperating-writer namespace; default inspection and unknown legacy files never authorize deletion. Windows managed cleanup is not supported.
+The host must protect policy, authority and ledger state, filter sensitive data and enforce permitted actions. Reviewed files and logs cannot grant permissions; hashes and JSON actor names are not authentication or a sandbox. No automatic hosted CI/AI-review service, native hosted-CI/SARIF importer, production connector, evaluation dataset or scorer is included. Host/model use may incur costs or transfer data to authorized providers; Markdown-only use does not guarantee offline operation.
 
-## Requirements and checks
+Optional integrations have separate contracts: [artifact content](docs/artifact-content.md), [source manifests](docs/source-manifests.md), [build provenance](docs/build-provenance.md), [host delivery](docs/host-delivery.md) and [temporary-state inspection/recovery](docs/temporary-state.md). Missing required capability stays UNKNOWN/HOLD. Simulations and interface tests do not establish production effect, health, identity or durability; Windows managed temporary cleanup is unsupported.
 
-Default A is Markdown plus your agent host: no new mandatory third-party runtime. Host/model access may have costs or send data to authorized providers; low dependency does not mean guaranteed offline operation. Optional B uses Python 3.9+ standard library and POSIX no-follow file operations/locks, or the native Windows backend described in [platform support](docs/windows-support.md); isolated Git operations need Git supporting `merge-tree --write-tree`. Only trusted self-owned fixtures may run through these helpers.
+## Repository checks
+
+These maintainer commands are optional for a first Markdown review. They require a Git checkout, existing Python/Git and authorization to create disposable self-owned fixtures outside it:
 
 ```sh
 python3 -B validation/run_checks.py --keep-artifacts
 python3 -B validation/mutation_check.py
 ```
 
-The unified checker requires a Git checkout. Both commands may initialize disposable self-owned Git fixtures; run them only when that local execution is authorized. They cover the repository router, four stage entries, both Python modes and distribution hygiene; receipts/fixtures stay outside the checkout. On Windows, use `python` in place of `python3` if that is your installed interpreter command. The fixed platform guard-removal checks are targeted regressions, not comprehensive mutation coverage. Tests do not establish production safety, model review quality or scanner effectiveness.
-
-The large lifecycle suite runs in two disjoint groups in each Python mode, with complete case coverage and the existing 180-second command limit. Timeout failures retain partial output and leave remaining checks NOT_RUN; they do not prove all descendant processes stopped. See [verification limits](docs/acceptance.md).
-
-Distribution checks reject unsafe selections before reading payloads and reuse the bounded, no-follow reader. Test fixtures share the external-directory and KEEP policy. The [verification contract](docs/acceptance.md#distribution-read-boundaries) defines the file/count/aggregate limits and remaining trust boundaries.
-
-The included [CI definition](.github/workflows/ci.yml) is configured for pushes to `main`, pull requests and manual dispatch, targeting Ubuntu 24.04 with Python 3.9 and 3.13, plus Windows 2025 x64 with Python 3.13. Each job runs ordinary and optimized checks, including both full demo variants, structure, safety boundaries, links and exact checksum coverage. The Python 3.13 jobs also run the fixed guard-removal checks. It uses read-only repository permissions, SHA-pinned official Actions and no repository secrets or deployment steps. Check the exact revision in [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml); historical runs from another repository do not validate it. Green CI is not production acceptance. Other runner combinations are outside this matrix; Windows support is conditional on its native safety tests completing, with no permission changes or silent skips. After an intentional file change, update `SHA256SUMS` for every selected file except itself.
-
-CI total ceilings are 15 minutes for Ubuntu and 50 minutes for Windows, sized from actual stage timings; individual maintained commands and mutation subprocesses retain their 180- and 90-second limits. See the [Windows CI budget rationale](docs/windows-support.md).
-
-The host protects trusted policy, authority and ledger directories. Reviewed content and logs cannot grant permissions; JSON actor names and hashes are not authentication or a sandbox. Required missing/stale/partial evidence remains an explicit gap. READY_FOR_NEXT does not authorize merge or release. See the shared [core contract](skills/pre-pr-review/references/contract.md).
-
-Stored merge/delivery plans and receipts are checked for exact intent and object/state consistency before execution or recovery. Unsafe legacy records require explicit replanning or migration; see [integrity and recovery compatibility](interfaces/lifecycle/README.md#plan-integrity-and-recovery-compatibility). These checks do not protect against a malicious writer controlling the trusted policy and approval store.
-
-Check results retain optional failures separately from blocking decisions. N_A requires a current, scoped host applicability record; a legacy reason alone becomes UNKNOWN. CLI budget reports separate existing ledger capacity, observed work in this invocation and unknown external costs. Capacity is not authorization, and safe receipt queries remain available after exhaustion. See the [record and accounting contract](interfaces/lifecycle/README.md).
-
-Optional [single-file artifact binding](docs/artifact-content.md) checks actual bytes and binds source/tree/configuration associations to new plans. Trusted policy selects required actions; legacy labels remain unverified. Delivery consumes the same bounded in-memory snapshot it verifies, with either the local simulation or an explicitly supplied trusted-host provider. Build provenance and writer isolation are host assertions, not authentication.
-
-Optional [source manifests](docs/source-manifests.md) bind scoped directory inputs or separate HEAD/index/actual-worktree projections to review identity. Collectors support POSIX and the bounded Windows NTFS configuration described in [platform support](docs/windows-support.md); native collection must pass the exact revision’s Windows checks. Windows records read-only attributes separately from Git index executable modes. Scope, exclusions and limits are part of the identity. It is not an atomic directory snapshot, directory-deployment consumer or authenticated build provenance; dirty source cannot silently become a committed merge candidate.
-
-New charged attempts save a versioned started record with the counter increment; started does not mean the action succeeded. A failed ledger save leaves durability unknown and fences that Session until a validated reload. Old usage is preserved without invented history, and accepted-operation recovery remains uncharged.
-
-## Verification and project layout
-
-Validation uses the maintained local/CI entry, including ordinary and optimized Python, isolated Git demos, file safety and distribution checks. Results bind to the tested revision; see [verification scope](docs/acceptance.md) and the actual Actions run. Independent AI reviews are development activities, **not an installed automatic AI-review service**. Simulated approvals/delivery do not prove live platform acceptance.
-
-| Path | Purpose |
-| --- | --- |
-| `.agents/skills/code-inspection/` | Repository-scoped Codex entry. |
-| `skills/` | Four stage instructions and shared evidence/authority protocols. |
-| `interfaces/`, `support/` | Optional local record runner and platform file/Git helpers. |
-| `examples/`, `validation/` | Disposable demonstration and maintained checks. |
-| `docs/` | Setup, workflow, limits and source attribution. |
+On Windows, use `python` if that is your installed interpreter command. The configured [CI matrix](.github/workflows/ci.yml) is Ubuntu 24.04/Python 3.9 and 3.13, plus Windows 2025 x64/Python 3.13 under its [native support contract](docs/windows-support.md). Check the [actual Actions result](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) for your exact revision. Tests cover structure, ordinary/optimized Python, isolated demos, file controls and exact checksum coverage; fixed guard-removal checks are targeted regressions. Results do not prove model-review quality, scanner effectiveness or production safety. Timeouts retain partial output and remaining NOT_RUN checks; descendant termination is not guaranteed. See [acceptance limits](docs/acceptance.md). After intentional distribution changes, update `SHA256SUMS` for every selected file except itself.
 
 ## Help, contributions and security
 
-Use [Issues](https://github.com/zhenkun26/Code-Inspection/issues) for sanitized questions and reproducible non-sensitive bugs. A private reporting channel is not assumed to be configured. Read [contribution guidance](CONTRIBUTING.md) before proposing changes and [the security policy](SECURITY.md) before reporting a vulnerability. Do not put credentials, private code, personal paths or raw host transcripts in public issues or pull requests. No response-time or production-support commitment is implied.
+Use [Issues](https://github.com/zhenkun26/Code-Inspection/issues) for sanitized questions and reproducible non-sensitive bugs. Read [contribution guidance](CONTRIBUTING.md) and [the security policy](SECURITY.md). A private reporting channel and response-time commitment are not assumed. Keep credentials, private code, personal paths and raw host transcripts out of public reports.
 
 ## License
 
-Original project content that the owner has the right to license is available under the [MIT License](LICENSE), Copyright (c) 2026 Zhenkun. Third-party articles, translations, images and private inputs are excluded and are not relicensed. No third-party runtime is vendored; method references and future copying obligations are recorded in [sources](docs/sources.md).
+Original project content that the owner has the right to license is available under the [MIT License](LICENSE), Copyright (c) 2026 Zhenkun. Third-party articles, translations, images and private inputs are excluded and are not relicensed. No third-party runtime is vendored; references and future copying obligations are recorded in [sources](docs/sources.md).
