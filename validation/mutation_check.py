@@ -1063,18 +1063,12 @@ POSIX_MANIFEST_TRANSITION_CASES = [('source-transition-observed-replacement',
   'SourceManifestTests.test_transition_observed_directory_replacement_is_refused')]
 CASES += MANIFEST_TRANSITION_CASES + POSIX_MANIFEST_TRANSITION_CASES
 
-def main():
-    os.environ['CODE_INSPECTION_KEEP_TEST_ARTIFACTS'] = '1'
-    output = Path(temporary_directory().name)
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-    sources = []
-    for folder in ('interfaces', 'support', 'skills', 'validation', 'docs'):
-        for path in (ROOT / folder).rglob('*'):
-            if (path.is_file() and not path.is_symlink() and path.suffix in {'.py', '.md', '.json', '.txt'}
-                    and not any(part in {'results', 'history', 'reviews', '__pycache__'} for part in path.relative_to(ROOT).parts)):
-                sources.append(path)
+def platform_cases(platform):
+    """Return the original ordered platform inventory without consulting the host."""
+    if platform not in {'nt', 'posix'}:
+        raise ValueError('unsupported mutation platform')
     cases = CASES
-    if os.name == 'nt':
+    if platform == 'nt':
         posix_owned = {x[0] for x in OWNED_TEMPORARY_CASES}
         cases = [x for x in CASES if x[0] != 'leaf-no-follow' and x[0] not in POSIX_SOURCE_CASES
                  and x[0] not in posix_owned and x[0] != 'owned-platform-refusal'
@@ -1085,6 +1079,22 @@ def main():
              'wincheck(LockFileEx(handle, 3, 0, 1, 0, c.byref(ov))); acquired = True', 'acquired = False',
              'validation/test_native_files.py', 'PortableFiles.test_lock_contention_and_exception_release'),
         ]
+    return list(cases)
+
+
+def killed_result(returncode, stderr):
+    """An import/runtime error is never an intended invariant failure."""
+    return returncode == 1 and 'FAIL:' in stderr and 'ERROR:' not in stderr
+
+
+def run_cases(cases, output, env):
+    """Run the existing copied positive controls and guard removals in owned output."""
+    sources = []
+    for folder in ('interfaces', 'support', 'skills', 'validation', 'docs'):
+        for path in (ROOT / folder).rglob('*'):
+            if (path.is_file() and not path.is_symlink() and path.suffix in {'.py', '.md', '.json', '.txt'}
+                    and not any(part in {'results', 'history', 'reviews', '__pycache__'} for part in path.relative_to(ROOT).parts)):
+                sources.append(path)
     results = []
     for name, filename, before, after, test_file, test in cases:
         copy = output / name
@@ -1109,8 +1119,7 @@ def main():
         run = subprocess.run([sys.executable, '-B', test_file, test], cwd=copy, env=env,
                              text=True, capture_output=True, timeout=90)
         (output / (name + '.log')).write_bytes((run.stdout + run.stderr).encode('utf-8'))
-        # An import/runtime error is not proof that the intended invariant was tested.
-        killed = run.returncode == 1 and 'FAIL:' in run.stderr and 'ERROR:' not in run.stderr
+        killed = killed_result(run.returncode, run.stderr)
         record = {'mutation': name, 'result': 'KILLED' if killed else 'NOT_VERIFIED',
                   'baseline_exit_code': baseline.returncode, 'exit_code': run.returncode}
         results.append(record)
@@ -1118,6 +1127,13 @@ def main():
     (output / 'summary.json').write_bytes((json.dumps(results, indent=2)).encode('utf-8'))
     print(json.dumps({'receipt_directory': str(output), 'scope': str(len(cases)) + ' fixed platform guard removals'}))
     return int(any(r['result'] != 'KILLED' for r in results))
+
+
+def main():
+    os.environ['CODE_INSPECTION_KEEP_TEST_ARTIFACTS'] = '1'
+    output = Path(temporary_directory().name)
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+    return run_cases(platform_cases(os.name), output, env)
 
 
 if __name__ == '__main__':

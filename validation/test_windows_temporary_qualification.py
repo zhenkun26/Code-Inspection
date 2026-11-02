@@ -372,17 +372,52 @@ class QualificationProtocol(unittest.TestCase):
                 owned.ManagedTemporaryNamespace('unused', '0' * 64, exclusive_namespace=True)
             opening.assert_not_called()
 
+    def test_serial_workflow_preserves_caps_dependency_and_fixed_output_routing(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        for job in ('validate', 'windows_maintained', 'windows_final'):
+            self.assertIn('\n  ' + job + ':\n', workflow)
+        ubuntu = workflow.split('\n  validate:\n', 1)[1].split('\n  windows_maintained:\n', 1)[0]
+        maintained = workflow.split('\n  windows_maintained:\n', 1)[1].split('\n  windows_final:\n', 1)[0]
+        final = workflow.split('\n  windows_final:\n', 1)[1]
+        self.assertEqual(workflow.count('    runs-on: windows-2025\n'), 2)
+        self.assertEqual(ubuntu.count("timeout_minutes: 15}"), 2)
+        self.assertNotIn('windows-2025', ubuntu)
+        self.assertIn('    timeout-minutes: 40\n', maintained)
+        self.assertIn('    timeout-minutes: 25\n', final)
+        self.assertIn('    needs: windows_maintained\n', final)
+        self.assertIn('    if: ${{ always() }}\n', final)
+        self.assertIn('    name: windows-2025 / Python 3.13\n', final)
+        self.assertIn('receipt: ${{ steps.maintained.outputs.receipt }}', maintained)
+        self.assertIn('CI_MAINTAINED_RESULT: ${{ needs.windows_maintained.result }}', final)
+        self.assertIn('CI_MAINTAINED_RECEIPT: ${{ needs.windows_maintained.outputs.receipt }}', final)
+        self.assertIn('run: python -B validation/ci_receipts.py maintained\n', maintained)
+        self.assertIn('run: python -B validation/ci_receipts.py mutations\n', final)
+        gate = final.split('      - name: Require complete same-attempt Windows evidence\n', 1)
+        self.assertEqual(len(gate), 2)
+        self.assertIn('        if: ${{ always() }}\n', gate[1])
+        self.assertIn('run: python -B validation/ci_receipts.py aggregate\n', gate[1])
+        for label, step in [('MUTATION', 'mutations'), ('OBSERVE', 'observe'), ('OPTIMIZED', 'optimized')]:
+            self.assertIn('CI_' + label + '_RESULT: ${{ steps.' + step + '.outcome }}', gate[1])
+            self.assertIn('CI_' + label + '_RECEIPT: ${{ steps.' + step + '.outputs.receipt }}', gate[1])
+        self.assertNotIn('continue-on-error', workflow)
+        self.assertNotIn('upload-artifact', workflow)
+        self.assertNotIn('download-artifact', workflow)
+        self.assertNotIn('permissions: write', workflow)
+        for line in workflow.splitlines():
+            if 'run:' in line:
+                self.assertNotIn('${{', line)
+
     def test_native_workflow_keeps_modes_bounded_and_failures_visible(self):
         workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
         steps = workflow.split('      - name: ')[1:]
-        native = [step for step in steps if 'windows_temporary_qualification.py' in step]
+        native = [step for step in steps if 'validation/ci_receipts.py observe' in step]
         self.assertEqual(len(native), 2)
         for step, mode in zip(native, ['-B', '-O -B']):
-            self.assertIn("if: ${{ !cancelled() && runner.os == 'Windows' }}", step)
+            self.assertIn("if: ${{ !cancelled() && needs.windows_maintained.result == 'success' }}", step)
             self.assertIn('timeout-minutes: 2\n', step)
-            self.assertIn('run: python ' + mode + ' validation/windows_temporary_qualification.py --authorize-owned-fixture\n', step)
+            self.assertIn('run: python ' + mode + ' validation/ci_receipts.py observe\n', step)
             self.assertNotIn('continue-on-error', step)
-        self.assertLess(workflow.index('run: python -B validation/mutation_check.py'),
+        self.assertLess(workflow.index('run: python -B validation/ci_receipts.py mutations'),
                         workflow.index(native[0]))
         self.assertIn('permissions:\n  contents: read\n', workflow)
         self.assertIn('persist-credentials: false', workflow)

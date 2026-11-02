@@ -1,19 +1,24 @@
 """Preserve complete check coverage and receipts when a real child times out."""
 import contextlib
+import copy
+import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from validation import run_checks
+from validation import ci_receipts, mutation_check
 from validation.lifecycle import test_lifecycle
 from validation.test_support import temporary_directory
+from validation.test_windows_temporary_qualification import protocol_fixture
 
 
 def module_case_ids():
@@ -153,6 +158,273 @@ class CheckRunner(unittest.TestCase):
         self.assertIn('partial stderr', partial)
         self.assertEqual(json.loads(stdout.getvalue().splitlines()[0])['receipt_directory'], str(self.root))
         self.assertEqual(json.loads(stdout.getvalue().splitlines()[-1])['result'], 'FAIL')
+
+
+class CiReceipts(unittest.TestCase):
+    """Synthetic protocol tests never represent a hosted or native CI run."""
+    def setUp(self):
+        retained = patch.dict(os.environ, {'CODE_INSPECTION_KEEP_TEST_ARTIFACTS': '1'})
+        retained.start()
+        self.addCleanup(retained.stop)
+        self.root = Path(temporary_directory().name)
+        self.c = ci_receipts
+        self.context = dict(sha='1' * 40, tree='2' * 40,
+                            workflow_ref='test-owner/test-repo/.github/workflows/ci.yml@refs/heads/test',
+                            workflow_sha256='3' * 64, run_id='123', run_attempt='2',
+                            platform=self.c.PLATFORM)
+        self.maintained = self.c.receipt_json('maintained', self.context,
+            [dict(id=name, status='PASS', exit_code=0) for name in self.c.maintained_ids()])
+
+    def raw(self, kind):
+        if kind == 'maintained':
+            return self.maintained
+        rows = ([dict(id=case[0], result='KILLED', baseline_exit_code=0, exit_code=1)
+                 for case in mutation_check.platform_cases('nt')]
+                if kind == 'mutations' else protocol_fixture()['observations'])
+        return self.c.receipt_json(kind, self.context, rows)
+
+    def test_original_ordered_command_and_mutation_inventories_are_unchanged(self):
+        # Independently captured before factoring platform selection; these bind
+        # every source replacement, copied control, command, and their order.
+        inventories = [('maintained', [row[1:] for row in run_checks.build_commands(ROOT)], 64,
+                        '94e497c758a21e815ec5903d7de6afc7c825b21d42095c3730724890ed8fc6d2'),
+                       ('nt', mutation_check.platform_cases('nt'), 196,
+                        '56e1dbb0e32f81407d3253f7e7d7bb7c3f4505984d35841a707816dc41c0b550'),
+                       ('posix', mutation_check.platform_cases('posix'), 221,
+                        'f9d8d796be749047d17106489af725918a8a255f5d23a8a5fc84434da1b8194f')]
+        for name, rows, count, expected in inventories:
+            with self.subTest(platform=name):
+                self.assertEqual(len(rows), count)
+                self.assertEqual(hashlib.sha256(json.dumps(rows, separators=(',', ':')).encode()).hexdigest(), expected)
+        self.assertEqual(len(self.c.maintained_ids()), 66)
+        self.assertEqual(len(set(self.c.maintained_ids())), 66)
+        mutation_check.platform_cases('posix').clear()
+        self.assertEqual(len(mutation_check.CASES), 221)
+        with self.assertRaises(ValueError): mutation_check.platform_cases('other')
+
+    def test_portable_output_caps_fit_windows_environment_and_fixed_key(self):
+        self.assertLessEqual(self.c.LIMIT, 24 * 1024)
+        for kind in ('maintained', 'mutations', 'observe', 'optimized'):
+            raw = self.raw(kind)
+            with self.subTest(kind=kind):
+                self.assertLess(len(raw), self.c.LIMIT)
+                self.assertLess(len(('CI_MUTATION_RECEIPT=' + raw + '\0').encode('utf-16-le')) // 2, 32767)
+                self.assertNotIn(str(self.root), raw)
+                self.assertNotIn('"command"', raw)
+                self.assertNotIn('"log"', raw)
+        with self.assertRaises(ValueError): self.c.strict_json('"' + 'x' * (24 * 1024) + '"')
+        output = self.root / 'github-output'
+        output.write_bytes(b'')
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.c.emit(self.maintained, {'GITHUB_OUTPUT': str(output)})
+        self.assertEqual(output.read_text(), 'receipt=' + self.maintained + '\n')
+        with self.assertRaises(ValueError): self.c.emit(self.maintained + '\nreceipt=forged', {'GITHUB_OUTPUT': str(output)})
+        self.assertEqual(output.read_text(), 'receipt=' + self.maintained + '\n')
+
+    def test_strict_json_and_schema_reject_ambiguous_or_extended_inputs(self):
+        original = json.loads(self.maintained)
+        bad = ['', self.maintained[:-1], '[]', 'null', '{"version":1,"version":1}',
+               self.maintained.replace('"version":1', '"version":NaN'),
+               self.maintained.replace('"version":1', '"version":true'), ' ' * (self.c.LIMIT + 1)]
+        for value in (None, True, 2, '1'):
+            item = copy.deepcopy(original); item['version'] = value; bad.append(json.dumps(item))
+        item = copy.deepcopy(original); item['raw_path'] = str(self.root); bad.append(json.dumps(item))
+        item = copy.deepcopy(original); item['records'][0]['exit_code'] = False; bad.append(json.dumps(item))
+        item = copy.deepcopy(original); item['records'][0]['status'] = 'RUNNING'; bad.append(json.dumps(item))
+        for raw in bad:
+            with self.subTest(raw=raw[:80]), self.assertRaises(ValueError):
+                self.c.validate_receipt(raw, 'maintained', self.context)
+        with self.assertRaises(ValueError):
+            self.c.strict_json('{"nested":{"x":1,"x":1}}')
+        with self.assertRaises(ValueError): self.c.strict_json('{"x":Infinity}')
+
+    def test_exact_sha_tree_workflow_platform_and_attempt_binding(self):
+        for key, wrong in [('sha', '4' * 40), ('tree', '5' * 40), ('workflow_sha256', '6' * 64),
+                           ('workflow_ref', self.context['workflow_ref'] + '-different'),
+                           ('run_id', '124'), ('run_attempt', '3'), ('platform', 'ubuntu-24.04')]:
+            item = json.loads(self.maintained); item['context'][key] = wrong
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                self.c.validate_receipt(json.dumps(item), 'maintained', self.context)
+        for key, wrong in [('run_id', True), ('run_attempt', 2), ('workflow_ref', 'private\npath')]:
+            item = json.loads(self.maintained); item['context'][key] = wrong
+            with self.subTest(field=key), self.assertRaises(ValueError):
+                self.c.validate_receipt(json.dumps(item), 'maintained', self.context)
+
+    def test_actual_windows_runtime_and_clean_exact_head_are_required(self):
+        env = dict(GITHUB_ACTIONS='true', RUNNER_OS='Windows', GITHUB_SHA=self.context['sha'],
+                   GITHUB_WORKFLOW_REF=self.context['workflow_ref'], GITHUB_RUN_ID='123', GITHUB_RUN_ATTEMPT='2')
+        facts = dict(os_name='nt', implementation='CPython', python=(3, 13), machine='amd64',
+                     pointer_bits=64, windows=(10, 0, 26100, 3))
+        with patch.object(self.c.qualification, 'runtime_facts', return_value={'os_name': 'posix'}), \
+             patch.object(self.c, 'git_value') as git:
+            with self.assertRaises(ValueError): self.c.current_context(env)
+            git.assert_not_called()
+        with patch.dict(os.environ, env), \
+             patch.object(self.c.qualification, 'runtime_facts', return_value={'os_name': 'posix'}), \
+             patch.object(self.c, 'retained_output') as fixture, \
+             patch.object(self.c.qualification, 'main') as native, patch.object(self.c, 'emit') as emit, \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.c.main(['maintained']), 1)
+        fixture.assert_not_called(); native.assert_not_called(); emit.assert_not_called()
+        with patch.object(self.c.qualification, 'runtime_facts', return_value=facts), \
+             patch.object(self.c, 'git_value', side_effect=[self.context['sha'], self.context['tree']]), \
+             patch.object(self.c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            actual = self.c.current_context(env)
+        expected = dict(self.context, workflow_sha256=hashlib.sha256((ROOT / '.github/workflows/ci.yml').read_bytes()).hexdigest())
+        self.assertEqual(actual, expected)
+        with patch.object(self.c.qualification, 'runtime_facts', return_value=facts), \
+             patch.object(self.c, 'git_value', return_value=self.context['sha']), \
+             patch.object(self.c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)):
+            for change in ({}, {'GITHUB_SHA': '0' * 40}, {'GITHUB_ACTIONS': 'false'}, {'RUNNER_OS': 'Linux'}):
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    self.c.current_context(dict(env, **change))
+
+    def test_missing_duplicate_unknown_reordered_failed_records_never_pass(self):
+        for kind in ('maintained', 'mutations'):
+            original = json.loads(self.raw(kind))
+            for rows in ([], original['records'][:-1], original['records'] * 2,
+                         original['records'][::-1], [original['records'][0]] * len(original['records'])):
+                item = dict(original, records=rows)
+                with self.subTest(kind=kind, length=len(rows)), self.assertRaises(ValueError):
+                    self.c.validate_receipt(json.dumps(item), kind, self.context)
+            item = copy.deepcopy(original); item['records'][0]['id'] = 'unknown'
+            with self.assertRaises(ValueError): self.c.validate_receipt(json.dumps(item), kind, self.context)
+        for field, wrong in [('baseline_exit_code', 1), ('baseline_exit_code', False),
+                             ('exit_code', 0), ('exit_code', True), ('result', 'SURVIVED')]:
+            item = json.loads(self.raw('mutations')); item['records'][0][field] = wrong
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.c.validate_receipt(json.dumps(item), 'mutations', self.context)
+
+    def test_no_expensive_phase_runs_on_invalid_or_unsuccessful_upstream(self):
+        original = json.loads(self.maintained)
+        stale = copy.deepcopy(original); stale['context']['run_attempt'] = '1'
+        variants = [dict(), dict(CI_MAINTAINED_RESULT='failure', CI_MAINTAINED_RECEIPT=self.maintained),
+                    dict(CI_MAINTAINED_RESULT='success', CI_MAINTAINED_RECEIPT=''),
+                    dict(CI_MAINTAINED_RESULT='success', CI_MAINTAINED_RECEIPT=self.maintained[:-1]),
+                    dict(CI_MAINTAINED_RESULT='success', CI_MAINTAINED_RECEIPT=json.dumps(stale))]
+        for phase in ('mutations', 'observe', 'aggregate'):
+            for env in variants:
+                with self.subTest(phase=phase, env=env.get('CI_MAINTAINED_RESULT')), \
+                     patch.dict(os.environ, env, clear=True), \
+                     patch.object(self.c, 'current_context', return_value=self.context), \
+                     patch.object(self.c, 'run_mutations') as mutations, \
+                     patch.object(self.c, 'run_observation') as observation, \
+                     patch.object(self.c, 'aggregate') as aggregate, patch.object(self.c, 'emit') as emit, \
+                     patch.object(self.c, 'retained_output') as fixture, \
+                     contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(self.c.main([phase]), 1)
+                    self.assertEqual(json.loads(error.getvalue())['result'], 'FAIL')
+                    mutations.assert_not_called(); observation.assert_not_called()
+                    aggregate.assert_not_called(); fixture.assert_not_called(); emit.assert_not_called()
+
+    def test_main_requires_complete_output_and_sanitizes_failures(self):
+        env = dict(CI_MAINTAINED_RESULT='success', CI_MAINTAINED_RECEIPT=self.maintained)
+        with patch.dict(os.environ, env), patch.object(self.c, 'current_context', return_value=self.context), \
+             patch.object(self.c, 'run_mutations', side_effect=ValueError('private-secret-' + str(self.root))), \
+             patch.object(self.c, 'emit') as emit, contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(self.c.main(['mutations']), 1)
+        emit.assert_not_called()
+        self.assertNotIn('private-secret', error.getvalue()); self.assertNotIn(str(self.root), error.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.c.main(['mutations', '--receipt-path', str(self.root)])
+
+    def test_partial_or_mismatched_runner_summary_is_not_success(self):
+        commands = [[sys.executable, '-B', '-c', 'print("retained control")']]
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(run_checks.run_commands(commands, self.root, dict(os.environ)), 0)
+        self.c.successful_checks(self.root, commands)
+        summary = json.loads((self.root / 'summary.json').read_text())
+        for field, wrong in [('status', 'RUNNING'), ('exit_code', False), ('command', ['other']),
+                             ('duration_seconds', float('nan')), ('log', '../other')]:
+            invalid = copy.deepcopy(summary); invalid[0][field] = wrong
+            (self.root / 'summary.json').write_text(json.dumps(invalid))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.c.successful_checks(self.root, commands)
+        (self.root / 'summary.json').write_text('[]')
+        with self.assertRaises(ValueError): self.c.successful_checks(self.root, commands)
+
+    def test_mutation_requires_real_positive_control_and_failure_without_error(self):
+        case = next(case for case in mutation_check.platform_cases(os.name) if case[0] == 'runner-load-tests-coverage')
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = mutation_check.run_cases([case], self.root, dict(os.environ, PYTHONDONTWRITEBYTECODE='1'))
+        self.assertEqual(code, 0)
+        self.assertEqual(self.c.successful_mutations(self.root, [case]),
+                         [dict(id=case[0], result='KILLED', baseline_exit_code=0, exit_code=1)])
+        self.assertTrue((self.root / case[0] / case[1]).is_file())
+        original = json.loads((self.root / 'summary.json').read_text())
+        for field, wrong in [('baseline_exit_code', 1), ('exit_code', 2), ('result', 'NOT_VERIFIED')]:
+            invalid = copy.deepcopy(original); invalid[0][field] = wrong
+            (self.root / 'summary.json').write_text(json.dumps(invalid))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.c.successful_mutations(self.root, [case])
+        (self.root / 'summary.json').write_text(json.dumps(original))
+        self.assertTrue(mutation_check.killed_result(1, 'FAIL: intended'))
+        self.assertFalse(mutation_check.killed_result(1, 'FAIL: intended\nERROR: import'))
+        self.assertFalse(mutation_check.killed_result(2, 'FAIL: intended'))
+
+    def test_real_runner_refuses_stdout_fail_stderr_error_and_failed_control(self):
+        case = next(case for case in mutation_check.platform_cases(os.name) if case[0] == 'runner-load-tests-coverage')
+        for name, results in [
+                ('runtime-error', [subprocess.CompletedProcess([], 0, '', 'OK\n'),
+                                   subprocess.CompletedProcess([], 1, 'FAIL: stdout only\n', 'ERROR: runtime\n')]),
+                ('control-error', [subprocess.CompletedProcess([], 1, '', 'FAIL: positive control\n')])]:
+            output = self.root / name; output.mkdir()
+            with self.subTest(case=name), patch.object(mutation_check.subprocess, 'run', side_effect=results) as run, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mutation_check.run_cases([case], output, dict(os.environ)), 1)
+                self.assertEqual(run.call_count, len(results))
+                self.assertEqual(json.loads((output / 'summary.json').read_text())[0]['result'], 'NOT_VERIFIED')
+                with self.assertRaises(ValueError): self.c.successful_mutations(output, [case])
+        with patch.object(self.c, 'retained_output', return_value=self.root), \
+             patch.object(mutation_check, 'run_cases', return_value=1), \
+             patch.object(self.c, 'successful_mutations') as summary:
+            with self.assertRaises(ValueError): self.c.run_mutations(self.context)
+        summary.assert_not_called()
+
+    def test_observations_require_complete_order_and_infer_interpreter_mode(self):
+        original = protocol_fixture()
+        for mode in (0, 1):
+            def observed(_):
+                print(json.dumps(original))
+                return 0
+            with patch.object(self.c.sys, 'flags', SimpleNamespace(optimize=mode)), \
+                 patch.object(self.c.qualification, 'main', side_effect=observed) as native:
+                raw = self.c.run_observation(self.context)
+            self.assertEqual(json.loads(raw)['kind'], 'optimized' if mode else 'observe')
+            native.assert_called_once_with(['--authorize-owned-fixture'])
+        for change in ('missing', 'reordered', 'incomplete', 'truncated', 'bad-exit'):
+            report = copy.deepcopy(original)
+            if change == 'missing': report['observations'].pop()
+            if change == 'reordered': report['observations'].reverse()
+            if change == 'incomplete': report = self.c.qualification.envelope('NATIVE_PROBE_FAILED', started=True)
+            def failed(_):
+                text = json.dumps(report)
+                print(text[:-1] if change == 'truncated' else text)
+                return 2 if change == 'bad-exit' else 0
+            with self.subTest(change=change), patch.object(self.c.qualification, 'main', side_effect=failed), \
+                 self.assertRaises(ValueError):
+                self.c.run_observation(self.context)
+
+    def test_aggregate_requires_all_same_attempt_successes_and_all_controls(self):
+        env = {}
+        for kind, prefix in [('mutations', 'CI_MUTATION'), ('observe', 'CI_OBSERVE'), ('optimized', 'CI_OPTIMIZED')]:
+            env[prefix + '_RESULT'] = 'success'; env[prefix + '_RECEIPT'] = self.raw(kind)
+        maintained = self.c.validate_receipt(self.maintained, 'maintained', self.context)
+        aggregate = self.c.aggregate(env, self.context, maintained)
+        self.assertEqual([row['id'] for row in json.loads(aggregate)['records']],
+                         ['maintained', 'mutations', 'observe', 'optimized'])
+        for prefix in ('CI_MUTATION', 'CI_OBSERVE', 'CI_OPTIMIZED'):
+            for wrong in ('failure', 'skipped', 'cancelled', ''):
+                with self.subTest(prefix=prefix, result=wrong), self.assertRaises(ValueError):
+                    self.c.aggregate(dict(env, **{prefix + '_RESULT': wrong}), self.context, maintained)
+            for wrong in ('', env[prefix + '_RECEIPT'][:-1]):
+                with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+                    self.c.aggregate(dict(env, **{prefix + '_RECEIPT': wrong}), self.context, maintained)
+        stale = json.loads(env['CI_OPTIMIZED_RECEIPT']); stale['context']['run_attempt'] = '1'
+        with self.assertRaises(ValueError):
+            self.c.aggregate(dict(env, CI_OPTIMIZED_RECEIPT=json.dumps(stale)), self.context, maintained)
+        with self.assertRaises(ValueError):
+            self.c.aggregate(dict(env, CI_OPTIMIZED_RECEIPT=env['CI_OBSERVE_RECEIPT']), self.context, maintained)
 
 
 if __name__ == '__main__':

@@ -24,7 +24,6 @@ jobs:
         include:
           - {os: ubuntu-24.04, python: '3.9', timeout_minutes: 15}
           - {os: ubuntu-24.04, python: '3.13', timeout_minutes: 15}
-          - {os: windows-2025, python: '3.13', timeout_minutes: 50}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       PYTHONUTF8: '1'
@@ -41,22 +40,83 @@ jobs:
         run: |
           python --version
           git --version
-      - name: Verify native source boundary before full checks
-        if: runner.os == 'Windows'
-        run: python -B validation/test_windows_manifests.py
-      - name: Verify optimized native source boundary before full checks
-        if: runner.os == 'Windows'
-        run: python -O -B validation/test_windows_manifests.py
       - name: Run maintained checks (ordinary and optimized Python)
         run: python -B validation/run_checks.py --keep-artifacts
       - name: Check fixed guard-removal regressions
         if: matrix.python == '3.13'
         run: python -B validation/mutation_check.py
+
+  windows_maintained:
+    name: Windows maintained / Python 3.13
+    runs-on: windows-2025
+    timeout-minutes: 40
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    outputs:
+      receipt: ${{ steps.maintained.outputs.receipt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Show runtime
+        run: |
+          python --version
+          git --version
+      - name: Run native prechecks and maintained checks
+        id: maintained
+        run: python -B validation/ci_receipts.py maintained
+
+  windows_final:
+    name: windows-2025 / Python 3.13
+    needs: windows_maintained
+    if: ${{ always() }}
+    runs-on: windows-2025
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      CI_MAINTAINED_RESULT: ${{ needs.windows_maintained.result }}
+      CI_MAINTAINED_RECEIPT: ${{ needs.windows_maintained.outputs.receipt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Show runtime
+        run: |
+          python --version
+          git --version
+      - name: Verify prerequisite and run all Windows mutations
+        id: mutations
+        run: python -B validation/ci_receipts.py mutations
       - name: Observe isolated Windows temporary APIs
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        id: observe
+        if: ${{ !cancelled() && needs.windows_maintained.result == 'success' }}
         timeout-minutes: 2
-        run: python -B validation/windows_temporary_qualification.py --authorize-owned-fixture
+        run: python -B validation/ci_receipts.py observe
       - name: Observe optimized isolated Windows temporary APIs
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        id: optimized
+        if: ${{ !cancelled() && needs.windows_maintained.result == 'success' }}
         timeout-minutes: 2
-        run: python -O -B validation/windows_temporary_qualification.py --authorize-owned-fixture
+        run: python -O -B validation/ci_receipts.py observe
+      - name: Require complete same-attempt Windows evidence
+        id: aggregate
+        if: ${{ always() }}
+        env:
+          CI_MUTATION_RESULT: ${{ steps.mutations.outcome }}
+          CI_MUTATION_RECEIPT: ${{ steps.mutations.outputs.receipt }}
+          CI_OBSERVE_RESULT: ${{ steps.observe.outcome }}
+          CI_OBSERVE_RECEIPT: ${{ steps.observe.outputs.receipt }}
+          CI_OPTIMIZED_RESULT: ${{ steps.optimized.outcome }}
+          CI_OPTIMIZED_RECEIPT: ${{ steps.optimized.outputs.receipt }}
+        run: python -B validation/ci_receipts.py aggregate

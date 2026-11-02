@@ -74,9 +74,9 @@ python3 -B validation/mutation_check.py
 
 分发检查会先拒绝不安全选集，再复用有界、不跟随链接的读取层。测试 fixture 统一遵循外部目录和 KEEP 策略。[验证契约](docs/acceptance.md#distribution-read-boundaries) 说明文件、数量、聚合上限及剩余信任边界。
 
-附带的 [CI定义](.github/workflows/ci.yml) 配置了main推送、PR及手动触发，矩阵为Ubuntu24.04的Python3.9和3.13，加Windows2025x64的Python3.13。每项检查普通与优化模式，含两种完整示范、结构、安全边界、链接及精确摘要覆盖；Python3.13另跑固定保护条件移除检查。工作流仅有仓库只读权限，官方Actions固定SHA，无仓库秘密或部署步骤。请到 [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) 核对精确版本，其他仓库的历史运行不能转作当前证据；CI绿色不等于生产验收；其他runner组合不在该矩阵；Windows支持以原生安全用例完成为条件，不改系统权限或静默跳过。主动修改文件后，更新覆盖全部选定文件（除自身）的 `SHA256SUMS`。
+附带的 [CI 定义](.github/workflows/ci.yml) 在 main 推送、PR 和手动触发时运行。Ubuntu 24.04/Python 3.9、3.13 保留全部维护检查，3.13 另运行全部适用变异检查。Windows 2025 x64/Python 3.13 分为两个串行作业：先运行原生前置检查和全部普通／优化模式维护检查，再运行全部 Windows 变异及正向对照、两种模式 API 观察和完整性汇总。两项使用各自全新的 runner 和 fixture；最终 Windows 检查只有在两阶段版本及 run/attempt 一致、全部必需结果齐备且成功时才通过。权限仍为只读，官方 Actions 固定 SHA，不使用仓库秘密或执行部署。请在 [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) 核对精确版本，历史结果不能替代当前验证。CI 绿色不等于生产验收；其他 runner 组合不在本范围，Windows 支持仍以适用原生检查完成为条件。主动修改分发文件后更新 `SHA256SUMS`，不包含清单自身。
 
-CI 总时限为 Ubuntu 15 分钟、Windows 50 分钟，依据实际阶段耗时设置；单条维护检查和单个变异测试子进程仍分别限时 180 秒与 90 秒。详见 [Windows CI 时间预算依据](docs/windows-support.md)。
+CI 单作业上限为 Ubuntu 每项 15 分钟、Windows 维护 40 分钟及后续变异／观察 25 分钟。每次工作流的 Windows 并发仍为 1；Windows 累计配置上限为 65 runner-minutes，完整工作流为 95。这是执行限额，不是实测时长或账单金额。维护命令和变异子进程仍分别限时 180 秒与 90 秒；重复执行的原生前置检查现在也明确使用同一 180 秒命令上限；缺失、失败、取消或混用 attempt 的结果不能满足汇总门禁。见 [Windows CI 范围与预算](docs/windows-support.md)。
 
 宿主保护政策、权限和账本目录；被审内容及日志不能扩权。JSON人名及摘要不是认证或沙箱。必需证据缺失、过时或不完整时保留缺口；READY_FOR_NEXT不授予合并或发布权限。见 [共享核心契约](skills/pre-pr-review/references/contract.md)。
 
