@@ -176,46 +176,65 @@ class LocalDeliveryVerification(unittest.TestCase):
                 self.assertEqual(len(h.callback_calls) - calls, 1)
                 self.assert_started_unknown(h, proposal, budget, expected_provider[0])
 
-    def test_retained_observation_clock_window_and_build_age_fail_closed(self):
-        for kind in ('checked', 'expires', 'age'):
-            with self.subTest(kind=kind):
-                h, _, proposal = self.fixture()
-                calls, budget = len(h.callback_calls), h.read()['budget']
-                provider = (h.host / 'sim-provider.json').read_bytes()
-                at = core.now()
-                h.result_mutator = lambda r: r.update(checked_at=at.isoformat(),
-                    expires_at=(at + timedelta(hours=2) if kind == 'age' else at + timedelta(seconds=10)).isoformat())
-                clock = [at]
-                def advance(s):
-                    clock[0] = at + timedelta(seconds={'checked': -1, 'expires': 11, 'age': 3600}[kind])
-                with patch.object(provenance, 'now', side_effect=lambda: clock[0]), \
-                        self.after_pending(h, proposal, advance), self.assertRaises(ValueError):
-                    h.execute_delivery(proposal['id'])
-                self.assertEqual(len(h.callback_calls) - calls, 1)
-                self.assert_started_unknown(h, proposal, budget, provider)
+    def _assert_retained_observation_clock_window_and_build_age_fail_closed(self, kind):
+        with self.subTest(kind=kind):
+            h, _, proposal = self.fixture()
+            calls, budget = len(h.callback_calls), h.read()['budget']
+            provider = (h.host / 'sim-provider.json').read_bytes()
+            at = core.now()
+            h.result_mutator = lambda r: r.update(checked_at=at.isoformat(),
+                expires_at=(at + timedelta(hours=2) if kind == 'age' else at + timedelta(seconds=10)).isoformat())
+            clock = [at]
+            def advance(s):
+                clock[0] = at + timedelta(seconds={'checked': -1, 'expires': 11, 'age': 3600}[kind])
+            with patch.object(provenance, 'now', side_effect=lambda: clock[0]), \
+                    self.after_pending(h, proposal, advance), self.assertRaises(ValueError):
+                h.execute_delivery(proposal['id'])
+            self.assertEqual(len(h.callback_calls) - calls, 1)
+            self.assert_started_unknown(h, proposal, budget, provider)
 
-    def test_retained_observation_binding_descriptor_and_build_instant_are_checked(self):
-        for kind in ('binding', 'descriptor', 'built', 'missing'):
-            with self.subTest(kind=kind):
-                h, _, proposal = self.fixture()
-                calls, budget = len(h.callback_calls), h.read()['budget']
-                provider = (h.host / 'sim-provider.json').read_bytes()
-                real = provenance.fresh
-                def corrupt(*args, **kwargs):
-                    result = real(*args, **kwargs)
-                    if kind == 'missing':
-                        return None
-                    if kind == 'binding':
-                        result['result']['binding']['intent_sha256'] = 'f' * 64
-                    elif kind == 'descriptor':
-                        result['descriptor']['evidence_path'] = 'different-evidence.json'
-                    else:
-                        result['result']['built_at'] = (core.timestamp(h.built_at) + timedelta(seconds=1)).isoformat()
-                    return result
-                with patch.object(provenance, 'fresh', corrupt), self.assertRaises(ValueError):
-                    h.execute_delivery(proposal['id'])
-                self.assertEqual(len(h.callback_calls) - calls, 1)
-                self.assert_started_unknown(h, proposal, budget, provider)
+    def test_retained_observation_checked_time_fails_closed(self):
+        self._assert_retained_observation_clock_window_and_build_age_fail_closed('checked')
+
+    def test_retained_observation_expiry_fails_closed(self):
+        self._assert_retained_observation_clock_window_and_build_age_fail_closed('expires')
+
+    def test_retained_observation_build_age_fails_closed(self):
+        self._assert_retained_observation_clock_window_and_build_age_fail_closed('age')
+
+    def _assert_retained_observation_binding_descriptor_and_build_instant_are_checked(self, kind):
+        with self.subTest(kind=kind):
+            h, _, proposal = self.fixture()
+            calls, budget = len(h.callback_calls), h.read()['budget']
+            provider = (h.host / 'sim-provider.json').read_bytes()
+            real = provenance.fresh
+            def corrupt(*args, **kwargs):
+                result = real(*args, **kwargs)
+                if kind == 'missing':
+                    return None
+                if kind == 'binding':
+                    result['result']['binding']['intent_sha256'] = 'f' * 64
+                elif kind == 'descriptor':
+                    result['descriptor']['evidence_path'] = 'different-evidence.json'
+                else:
+                    result['result']['built_at'] = (core.timestamp(h.built_at) + timedelta(seconds=1)).isoformat()
+                return result
+            with patch.object(provenance, 'fresh', corrupt), self.assertRaises(ValueError):
+                h.execute_delivery(proposal['id'])
+            self.assertEqual(len(h.callback_calls) - calls, 1)
+            self.assert_started_unknown(h, proposal, budget, provider)
+
+    def test_retained_observation_binding_is_checked(self):
+        self._assert_retained_observation_binding_descriptor_and_build_instant_are_checked('binding')
+
+    def test_retained_observation_descriptor_is_checked(self):
+        self._assert_retained_observation_binding_descriptor_and_build_instant_are_checked('descriptor')
+
+    def test_retained_observation_build_instant_is_checked(self):
+        self._assert_retained_observation_binding_descriptor_and_build_instant_are_checked('built')
+
+    def test_retained_observation_missing_is_rejected(self):
+        self._assert_retained_observation_binding_descriptor_and_build_instant_are_checked('missing')
 
     def test_missing_optional_proof_cannot_suppress_new_requirement(self):
         h = builds.BuildProvenance()

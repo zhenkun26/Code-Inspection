@@ -1,16 +1,20 @@
 """Target-qualified persistence boundary, using only self-owned local doubles."""
 import copy
 from concurrent.futures import CancelledError
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+import errno
+import io
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from interfaces.lifecycle import accounting, core, delivery, host_delivery, persistence, provenance, review
+from interfaces.lifecycle import accounting, artifacts, core, delivery, host_delivery, merge, persistence, provenance, review
+from validation.lifecycle import preflight_diagnostics as diagnostics
 from validation.lifecycle import test_host_delivery as host_tests
 from validation.lifecycle import test_build_provenance as provenance_tests
 from validation.lifecycle.fixture import grant, write
@@ -18,6 +22,8 @@ from validation.lifecycle.fixture import grant, write
 
 class PersistenceContract(unittest.TestCase):
     def setUp(self):
+        observer = diagnostics.PreflightObserver().start()
+        self.addCleanup(observer.stop)
         # Compose the fixture without inheriting its separately owned test cases.
         self.helper = host_tests.HostDelivery(methodName='runTest')
         self.helper.setUp()
@@ -484,6 +490,315 @@ class PersistenceContract(unittest.TestCase):
                 self.assertEqual(report['ledger']['durability_scope'], {
                     'save_or_reload_visibility': 'confirmed', 'power_loss': 'unknown',
                     'host_qualified_checkpoint': 'not_asserted'})
+
+
+class PreflightDiagnostics(unittest.TestCase):
+    def arguments(self):
+        # Unit doubles exercise the real preflight without a second payload/Git read.
+        session = object.__new__(core.Session)
+        session.pin = 'b' * 64
+        session.require_usable = Mock()
+        session.state = {'subject': {'head': 'e' * 40}, 'budget': {'operations': 0, 'rounds': 0}}
+        session.policy = {'allowed_actions': ['merge-approve', 'pr-approve', 'merge-execute'],
+                          'humans': ['fixture-human'], 'budget': {'max_operations': 10, 'max_rounds': 3}}
+        session.authority = Mock(return_value=[{
+            'id': action, 'actor': 'fixture-human', 'kind': 'human', 'action': action,
+            'binding': 'a' * 64 if action == 'merge-execute' else 'c' * 64,
+            'policy_sha': session.pin, 'decision': 'approve',
+            'expires_at': '2031-01-01T00:00:00+00:00'} for action in session.policy['allowed_actions']])
+        plan = {'id': 'a' * 64, 'base': 'c' * 40, 'head': 'e' * 40, 'tree': 'd' * 40,
+                'subject': {'head': 'f' * 40}, 'source_subject': session.state['subject']}
+        git = object.__new__(merge.LocalGit)
+        git.run = Mock(return_value=SimpleNamespace(returncode=0, stdout=plan['tree'] + '\n'))
+        return session, plan, git
+
+    def report(self, recommendation='READY_FOR_NEXT'):
+        return {'recommendation': recommendation, 'checks': [], 'reasons': []}
+
+    def records(self, lines):
+        for line in lines:
+            self.assertTrue(line.startswith(diagnostics.PREFIX))
+            self.assertTrue(line.endswith('\n'))
+            self.assertLessEqual(len(line.encode('utf-8')), diagnostics.MAX_BYTES)
+        return [json.loads(line[len(diagnostics.PREFIX):]) for line in lines]
+
+    def test_return_identity_and_single_original_call_for_every_recommendation(self):
+        args = self.arguments()
+        for recommendation in ('READY_FOR_NEXT', 'HOLD', 'REPLAN'):
+            with self.subTest(recommendation=recommendation):
+                result, lines = self.report(recommendation), []
+                original = Mock(return_value=result)
+                with patch.object(merge, '_preflight', original):
+                    with diagnostics.PreflightObserver(lines.append):
+                        self.assertIs(merge._preflight(*args, check_content=False), result)
+                    self.assertIs(merge._preflight, original)
+                original.assert_called_once_with(*args, check_content=False)
+                record, = self.records(lines)
+                self.assertEqual(record['outcome'], recommendation)
+                self.assertEqual(record['plan_id'], args[1]['id'])
+                self.assertEqual(record['policy_id'], args[0].pin)
+
+    def test_original_exception_identity_including_interrupts_is_preserved(self):
+        args = self.arguments()
+        for error in (ValueError('private-message'), KeyboardInterrupt('private-message'),
+                      SystemExit('private-message'), PermissionError(errno.EACCES, 'private-message', '/private/file')):
+            with self.subTest(kind=type(error).__name__):
+                lines, original = [], Mock(side_effect=error)
+                with patch.object(merge, '_preflight', original), diagnostics.PreflightObserver(lines.append):
+                    with self.assertRaises(type(error)) as caught:
+                        merge._preflight(*args)
+                self.assertIs(caught.exception, error)
+                original.assert_called_once_with(*args)
+                record, = self.records(lines)
+                self.assertEqual(record['outcome'], 'ERROR')
+                self.assertNotIn('private-message', lines[0])
+                self.assertNotIn('/private/file', lines[0])
+
+    def test_real_preflight_records_actual_calls_without_duplicate_authority_or_payload(self):
+        args = self.arguments()
+        session, plan, git = args
+        instant = datetime(2030, 1, 2, 3, 4, 5, 123456, tzinfo=timezone.utc)
+        lines = []
+        def evaluated(s, stage='pr', *unused, **kwargs):
+            core.now()
+            review.now()
+            self.assertTrue(s.authorized(stage + '-approve', 'c' * 64))
+            result = self.report()
+            result['checks'] = [{'id': 'integration' if stage == 'merge' else 'ci', 'status': 'PASS'}]
+            return result
+        original = Mock(wraps=merge._preflight)
+        with patch.object(merge, '_preflight', original), diagnostics.PreflightObserver(lines.append):
+            with patch.object(merge, 'evaluate', side_effect=evaluated) as evaluate, \
+                    patch.object(core, 'now', return_value=instant) as core_clock, \
+                    patch.object(review, 'now', return_value=instant) as review_clock, \
+                    patch.object(merge.LocalGit, 'target', return_value=plan['base']) as target, \
+                    patch.object(artifacts, 'fresh', side_effect=PermissionError(
+                        errno.EACCES, 'private-artifact-message', '/private/artifact')) as fresh:
+                result = merge._preflight(*args)
+                self.assertIs(core.now, core_clock)
+                self.assertIs(review.now, review_clock)
+                self.assertIs(merge.evaluate, evaluate)
+                self.assertIs(merge.LocalGit.target, target)
+                self.assertIs(artifacts.fresh, fresh)
+                self.assertEqual((core_clock.call_count, review_clock.call_count), (5, 2))
+                self.assertEqual(evaluate.call_count, 2)
+                target.assert_called_once_with()
+                fresh.assert_called_once_with(session, 'merge-execute', None)
+        original.assert_called_once_with(*args)
+        self.assertEqual(session.authority.call_count, 3)
+        git.run.assert_called_once_with('merge-tree', '--write-tree', plan['base'], plan['head'])
+        self.assertEqual(result['recommendation'], 'HOLD')
+        record, = self.records(lines)
+        events = record['events']
+        self.assertEqual([e['stage'] for e in events if e['kind'] == 'evaluate'], ['merge', 'pr'])
+        self.assertEqual([e['at'] for e in events if e['kind'] == 'review-clock'], [instant.isoformat()] * 2)
+        self.assertEqual(len([e for e in events if e['kind'] == 'core-clock']), 5)
+        artifact, = [e for e in events if e['kind'] == 'artifact-fresh']
+        self.assertEqual(artifact['exception'], {'type': 'PermissionError', 'errno': errno.EACCES,
+                                               'category': 'PERMISSION'})
+        self.assertEqual(record['report']['reasons'], ['ARTIFACT_CONTENT'])
+        self.assertEqual([e['sequence'] for e in events], list(range(1, len(events) + 1)))
+        self.assertEqual([e['monotonic_ns'] for e in events], sorted(e['monotonic_ns'] for e in events))
+        self.assertNotIn('private-artifact-message', lines[0])
+        self.assertNotIn('/private/artifact', lines[0])
+
+    def test_preexisting_method_mocks_keep_their_binding_and_are_restored(self):
+        args = self.arguments()
+        result, lines = self.report(), []
+        def preflight(s, plan, git):
+            self.assertTrue(s.authorized('merge-execute', plan['id']))
+            self.assertEqual(git.target(), plan['base'])
+            return result
+        with patch.object(merge, '_preflight', side_effect=preflight) as original, \
+                patch.object(core.Session, 'authorized', return_value=True) as authorized, \
+                patch.object(merge.LocalGit, 'target', return_value=args[1]['base']) as target:
+            with diagnostics.PreflightObserver(lines.append):
+                self.assertIs(merge._preflight(*args), result)
+                self.assertIs(core.Session.authorized, authorized)
+                self.assertIs(merge.LocalGit.target, target)
+            original.assert_called_once_with(*args)
+            authorized.assert_called_once_with('merge-execute', args[1]['id'])
+            target.assert_called_once_with()
+        self.assertEqual(len(self.records(lines)[0]['events']), 2)
+
+    def test_untrusted_text_and_objects_are_redacted_without_formatting_them(self):
+        secret = 'secret@example.invalid /private/credential\nINJECTED'
+        class NoFormatting:
+            def __str__(self):
+                raise AssertionError('diagnostic formatted private object')
+            __repr__ = __str__
+        error = type('PrivateExceptionName', (Exception,), {})(secret)
+        args = self.arguments()
+        args[0].pin = secret
+        args[1]['id'] = secret
+        result = {'recommendation': secret, 'checks': [{'id': secret, 'status': secret,
+                  'reason': secret}], 'reasons': [secret, 'unresolved finding ' + secret],
+                  'subject': {'path': secret}, 'authority': secret, 'provider': NoFormatting()}
+        def preflight(*unused):
+            review.now()
+            try:
+                artifacts.fresh(*unused)
+            except Exception:
+                pass
+            return result
+        lines = []
+        with patch.object(merge, '_preflight', side_effect=preflight), \
+                patch.object(review, 'now', return_value=NoFormatting()), \
+                patch.object(artifacts, 'fresh', side_effect=error), diagnostics.PreflightObserver(lines.append):
+            self.assertIs(merge._preflight(*args), result)
+        record, = self.records(lines)
+        self.assertFalse(record['complete'])
+        self.assertIsNone(record['plan_id'])
+        self.assertIsNone(record['policy_id'])
+        self.assertEqual(record['outcome'], 'REDACTED')
+        self.assertEqual(record['report']['reasons'], ['REDACTED', 'UNRESOLVED_FINDING'])
+        for forbidden in (secret, 'secret@example.invalid', '/private/', 'PrivateExceptionName', 'INJECTED'):
+            self.assertNotIn(forbidden, lines[0])
+        self.assertIsNone(record['events'][0]['at'])
+        self.assertEqual(record['events'][1]['exception']['type'], 'REDACTED')
+
+    def test_event_item_and_whole_line_caps_emit_valid_json(self):
+        args, lines = self.arguments(), []
+        result = self.report()
+        result['checks'] = [{'id': 'ci', 'status': 'PASS'}] * (diagnostics.MAX_ITEMS + 1)
+        result['reasons'] = ['target drift'] * (diagnostics.MAX_ITEMS + 1)
+        with patch.object(merge, '_preflight', return_value=result), diagnostics.PreflightObserver(lines.append):
+            self.assertIs(merge._preflight(*args), result)
+        record, = self.records(lines)
+        self.assertTrue(record['truncated'])
+        self.assertFalse(record['complete'])
+        self.assertEqual(len(record['report']['checks']), diagnostics.MAX_ITEMS)
+        self.assertEqual(len(record['report']['reasons']), diagnostics.MAX_ITEMS)
+        lines.clear()
+        def many_clocks(*unused):
+            for _ in range(diagnostics.MAX_EVENTS + 5):
+                review.now()
+            return self.report()
+        with patch.object(merge, '_preflight', side_effect=many_clocks) as original, \
+                patch.object(review, 'now', return_value=datetime(2030, 1, 1, tzinfo=timezone.utc)) as clock, \
+                diagnostics.PreflightObserver(lines.append):
+            merge._preflight(*args)
+        original.assert_called_once_with(*args)
+        self.assertEqual(clock.call_count, diagnostics.MAX_EVENTS + 5)
+        record, = self.records(lines)
+        self.assertTrue(record['truncated'])
+        self.assertFalse(record['complete'])
+        self.assertLessEqual(len(record['events']), diagnostics.MAX_EVENTS)
+        lines.clear()
+        with patch.object(merge, '_preflight', side_effect=many_clocks), \
+                patch.object(diagnostics, 'MAX_BYTES', 2048), diagnostics.PreflightObserver(lines.append):
+            merge._preflight(*args)
+            record, = self.records(lines)
+            self.assertTrue(record['truncated'])
+            self.assertEqual(record['events'], [])
+
+    def test_source_binding_is_cached_bounded_nullable_and_refreshed_per_context(self):
+        from validation.test_support import temporary_directory
+        args, lines = self.arguments(), []
+        with temporary_directory() as temporary:
+            root = Path(temporary)
+            source = root / diagnostics.SOURCE_FILES['merge']
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'first source')
+            with patch.object(merge, '_preflight', return_value=self.report()), \
+                    patch.object(diagnostics, 'source_version', wraps=diagnostics.source_version) as version, \
+                    patch.object(diagnostics.subprocess, 'run', side_effect=AssertionError('extra Git call')):
+                with diagnostics.PreflightObserver(lines.append, source_root=root):
+                    merge._preflight(*args)
+                    source.write_bytes(b'next source')
+                    merge._preflight(*args)
+                self.assertEqual(version.call_count, 1)
+                with diagnostics.PreflightObserver(lines.append, source_root=root):
+                    merge._preflight(*args)
+                self.assertEqual(version.call_count, 2)
+                source.write_bytes(b'x' * (diagnostics.MAX_SOURCE_BYTES + 1))
+                with diagnostics.PreflightObserver(lines.append, source_root=root):
+                    merge._preflight(*args)
+        first, cached, changed, oversized = self.records(lines)
+        self.assertEqual(first['source_version'], cached['source_version'])
+        self.assertNotEqual(first['source_version']['files']['merge'], changed['source_version']['files']['merge'])
+        self.assertIsNone(oversized['source_version']['files']['merge'])
+        self.assertIsNone(first['source_version']['files']['core'])
+        self.assertFalse(first['source_version']['complete'])
+        self.assertFalse(first['complete'])
+        self.assertEqual(first['source_version']['scope'], 'disk-at-observer-start')
+        self.assertFalse(first['source_version']['loaded_code_attested'])
+
+    def test_sink_failure_preserves_return_and_original_exception(self):
+        args, result = self.arguments(), self.report()
+        error = ValueError('private-product-error')
+        for fails in (False, True):
+            lines = io.StringIO()
+            original = Mock(side_effect=error) if fails else Mock(return_value=result)
+            with patch.object(merge, '_preflight', original), patch.object(sys, 'stderr', lines), \
+                    diagnostics.PreflightObserver(Mock(side_effect=RuntimeError('private-sink-error'))):
+                if fails:
+                    with self.assertRaises(ValueError) as caught:
+                        merge._preflight(*args)
+                    self.assertIs(caught.exception, error)
+                else:
+                    self.assertIs(merge._preflight(*args), result)
+            original.assert_called_once_with(*args)
+            record, = self.records(lines.getvalue().splitlines(keepends=True))
+            self.assertTrue(record['unavailable'])
+            self.assertFalse(record['complete'])
+            self.assertNotIn('private-', lines.getvalue())
+
+    def test_diagnostic_setup_sanitizer_emitter_and_restore_failures_do_not_change_outcome(self):
+        args, result = self.arguments(), self.report()
+        for failure in ('source', 'trace', 'setup', 'sanitize', 'emit', 'restore'):
+            for throws in (False, True):
+                with self.subTest(failure=failure, throws=throws):
+                    lines, fallback = [], io.StringIO()
+                    error = ValueError('private-product-error')
+                    original = Mock(side_effect=error) if throws else Mock(return_value=result)
+                    saved = (merge.evaluate, review.now, core.now, artifacts.fresh,
+                             core.Session.authorized, merge.LocalGit.target)
+                    if failure == 'source':
+                        fault = patch.object(diagnostics, 'source_version', side_effect=RuntimeError('private-source'))
+                    elif failure == 'trace':
+                        fault = patch.object(diagnostics, '_Trace', side_effect=RuntimeError('private-trace'))
+                    elif failure == 'setup':
+                        fault = patch.object(diagnostics, '_observed', side_effect=RuntimeError('private-setup'))
+                    elif failure == 'sanitize':
+                        fault = patch.object(diagnostics._Trace, 'report', side_effect=RuntimeError('private-sanitize'))
+                    elif failure == 'emit':
+                        fault = patch.object(diagnostics.PreflightObserver, '_emit', side_effect=RuntimeError('private-emit'))
+                    else:
+                        close = diagnostics.ExitStack.close
+                        def closed(stack):
+                            close(stack)
+                            raise RuntimeError('private-restore')
+                        fault = patch.object(diagnostics.ExitStack, 'close', closed)
+                    with fault, patch.object(merge, '_preflight', original), patch.object(sys, 'stderr', fallback), \
+                            diagnostics.PreflightObserver(lines.append):
+                        if throws:
+                            with self.assertRaises(ValueError) as caught:
+                                merge._preflight(*args)
+                            self.assertIs(caught.exception, error)
+                        else:
+                            self.assertIs(merge._preflight(*args), result)
+                        self.assertEqual(saved, (merge.evaluate, review.now, core.now, artifacts.fresh,
+                                               core.Session.authorized, merge.LocalGit.target))
+                    original.assert_called_once_with(*args)
+                    captured = lines + fallback.getvalue().splitlines(keepends=True)
+                    self.assertEqual(len(self.records(captured)), 1)
+                    self.assertNotIn('private-', ''.join(captured))
+
+    def test_repeated_start_refuses_without_recursion_and_stop_is_idempotent(self):
+        args, lines, result = self.arguments(), [], self.report()
+        with patch.object(merge, '_preflight', return_value=result) as original:
+            observer = diagnostics.PreflightObserver(lines.append).start()
+            self.addCleanup(observer.stop)
+            installed = merge._preflight
+            with self.assertRaisesRegex(RuntimeError, 'already started'):
+                observer.start()
+            self.assertIs(merge._preflight, installed)
+            self.assertIs(merge._preflight(*args), result)
+            observer.stop()
+            observer.stop()
+            self.assertIs(merge._preflight, original)
+            original.assert_called_once_with(*args)
 
 
 if __name__ == '__main__':
