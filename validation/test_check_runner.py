@@ -32,6 +32,22 @@ def module_case_ids():
     return list(flatten(unittest.defaultTestLoader.loadTestsFromModule(test_lifecycle)))
 
 
+STRUCTURE_SKILL_PATHS = ('.agents/skills/code-inspection', 'skills/delivery-review',
+                         'skills/merge-review', 'skills/pr-in-review', 'skills/pre-pr-review')
+
+
+def inventory_comparison_rows(rows):
+    """Test-only spelling equivalence for five fixed path arguments, not commands."""
+    result = copy.deepcopy(rows)
+    for index, path in enumerate(STRUCTURE_SKILL_PATHS):
+        expected = ['-B', 'validation/pre-pr-review/structure_check.py', path, '--repo-root', '.']
+        windows = expected[:]; windows[2] = path.replace('/', '\\')
+        if len(rows) <= index or rows[index] not in (expected, windows):
+            raise ValueError('structure-check inventory changed')
+        result[index] = expected
+    return result
+
+
 class CheckRunner(unittest.TestCase):
     def setUp(self):
         self.tmp = temporary_directory()
@@ -198,7 +214,8 @@ class CiReceipts(unittest.TestCase):
     def test_original_ordered_command_and_mutation_inventories_are_unchanged(self):
         # Independently captured before factoring platform selection; these bind
         # every source replacement, copied control, command, and their order.
-        inventories = [('maintained', [row[1:] for row in run_checks.build_commands(ROOT)], 64,
+        inventories = [('maintained', inventory_comparison_rows(
+                            [row[1:] for row in run_checks.build_commands(ROOT)]), 64,
                         '94e497c758a21e815ec5903d7de6afc7c825b21d42095c3730724890ed8fc6d2'),
                        ('nt', mutation_check.platform_cases('nt'), 196,
                         '56e1dbb0e32f81407d3253f7e7d7bb7c3f4505984d35841a707816dc41c0b550'),
@@ -213,6 +230,83 @@ class CiReceipts(unittest.TestCase):
         mutation_check.platform_cases('posix').clear()
         self.assertEqual(len(mutation_check.CASES), 221)
         with self.assertRaises(ValueError): mutation_check.platform_cases('other')
+
+    def test_windows_inventory_representation_retains_original_coverage(self):
+        commands = run_checks.build_commands(ROOT)
+        for row in commands[:5]:
+            row[3] = row[3].replace('/', '\\')
+        with patch.object(run_checks, 'build_commands', return_value=commands):
+            self.test_original_ordered_command_and_mutation_inventories_are_unchanged()
+
+    def frozen_inventory_matches(self, rows):
+        try:
+            normalized = inventory_comparison_rows(rows)
+        except ValueError:
+            return False
+        return (len(normalized) == 64 and
+                hashlib.sha256(json.dumps(normalized, separators=(',', ':')).encode()).hexdigest()
+                == '94e497c758a21e815ec5903d7de6afc7c825b21d42095c3730724890ed8fc6d2')
+
+    def test_inventory_posix_and_windows_spelling_preserves_input_and_other_arguments(self):
+        rows = [row[1:] for row in run_checks.build_commands(ROOT)]
+        for windows in (False, True):
+            source = copy.deepcopy(rows)
+            for index, path in enumerate(STRUCTURE_SKILL_PATHS):
+                source[index][2] = path.replace('/', '\\') if windows else path
+            before = copy.deepcopy(source)
+            canonical = inventory_comparison_rows(source)
+            with self.subTest(windows=windows):
+                self.assertTrue(self.frozen_inventory_matches(source))
+                self.assertEqual(source, before)
+                self.assertEqual(canonical[5:], source[5:])
+                self.assertIsNot(canonical, source)
+                for index, path in enumerate(STRUCTURE_SKILL_PATHS):
+                    self.assertEqual(canonical[index][2], path)
+                    self.assertEqual(canonical[index][:2] + canonical[index][3:],
+                                     source[index][:2] + source[index][3:])
+
+    def test_inventory_rejects_wrong_path_and_structure_arguments(self):
+        rows = [row[1:] for row in run_checks.build_commands(ROOT)]
+        for index, path in enumerate(STRUCTURE_SKILL_PATHS):
+            changes = [(2, value) for value in (path + '/other', '../' + path, '/' + path,
+                       path.upper(), path + '/', './' + path, path.replace('/', '\\', 1) + '/.',
+                       'C:\\' + path.replace('/', '\\'), path.replace('/', '//'))]
+            changes += [(0, '-O'), (1, 'validation\\pre-pr-review\\structure_check.py'),
+                        (3, '--different-root'), (4, '..')]
+            for slot, value in changes:
+                changed = copy.deepcopy(rows); changed[index][slot] = value
+                with self.subTest(index=index, slot=slot, value=value):
+                    self.assertFalse(self.frozen_inventory_matches(changed))
+            changed = copy.deepcopy(rows); changed[index].append('--extra')
+            self.assertFalse(self.frozen_inventory_matches(changed))
+        changed = copy.deepcopy(rows)
+        changed[0][2] = '.agents\\skills/code-inspection'
+        self.assertFalse(self.frozen_inventory_matches(changed))
+
+    def test_inventory_rejects_order_omission_duplication_and_later_command_changes(self):
+        rows = inventory_comparison_rows([row[1:] for row in run_checks.build_commands(ROOT)])
+        variants = []
+        for a, b in ((0, 1), (5, 6)):
+            changed = copy.deepcopy(rows); changed[a], changed[b] = changed[b], changed[a]
+            variants.append(changed)
+        for index in (0, 5, 63):
+            changed = copy.deepcopy(rows); del changed[index]; variants.append(changed)
+            changed = copy.deepcopy(rows); changed.insert(index, copy.deepcopy(changed[index])); variants.append(changed)
+        changed = copy.deepcopy(rows); changed[6] = copy.deepcopy(changed[5]); variants.append(changed)
+        changed = copy.deepcopy(rows); changed[-1][-1] = 'validation\\hygiene_check.py'; variants.append(changed)
+        changed = copy.deepcopy(rows); changed[-1].append('--extra'); variants.append(changed)
+        for index, changed in enumerate(variants):
+            with self.subTest(variant=index):
+                self.assertFalse(self.frozen_inventory_matches(changed))
+
+    def test_inventory_existing_gate_rejects_later_command_change(self):
+        commands = run_checks.build_commands(ROOT)
+        commands[-1][-1] = 'validation\\hygiene_check.py'
+        result = unittest.TestResult()
+        with patch.object(run_checks, 'build_commands', return_value=commands):
+            CiReceipts('test_original_ordered_command_and_mutation_inventories_are_unchanged').run(result)
+        self.assertEqual(len(result.failures), 1)
+        self.assertEqual(result.errors, [])
 
     def test_portable_output_caps_fit_windows_environment_and_fixed_key(self):
         self.assertLessEqual(self.c.LIMIT, 24 * 1024)
