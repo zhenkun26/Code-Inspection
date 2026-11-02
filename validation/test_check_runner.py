@@ -426,6 +426,133 @@ class CiReceipts(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.c.aggregate(dict(env, CI_OPTIMIZED_RECEIPT=env['CI_OBSERVE_RECEIPT']), self.context, maintained)
 
+    def diagnostic_run(self, fault=None):
+        """Synthetic producer: never execute product checks or claim hosted CI."""
+        commands = run_checks.build_commands(ROOT)
+        original_read = self.c.read_owned
+        counts = dict(allocate=0, run=0, discover=0)
+
+        def allocate():
+            counts['allocate'] += 1
+            if fault == 'allocate' and counts['allocate'] == 2:
+                raise OSError('private-value-' + str(self.root))
+            output = self.root / ('phase-%d' % counts['allocate'])
+            output.mkdir()
+            return output
+
+        def discover(_):
+            counts['discover'] += 1
+            if fault == 'discover':
+                raise ValueError('private-value-' + str(self.root))
+            return commands
+
+        def runner(selected, output, env):
+            counts['run'] += 1
+            rows = []
+            for number, command in enumerate(selected):
+                row = dict(command=command[1:], status='PASS', exit_code=0,
+                           duration_seconds=0.125, log='check-%02d.log' % number)
+                cases = [x for x in command if x.startswith('validation.lifecycle.test_lifecycle.Lifecycle.')]
+                if cases:
+                    row['test_cases'] = cases
+                rows.append(row)
+                (output / row['log']).write_bytes(b'synthetic control')
+            raw = json.dumps(rows).encode('utf-8')
+            if counts['run'] == 1:
+                if fault == 'json': raw = b'{'
+                if fault == 'decode': raw = b'\xff'
+                if fault == 'schema': raw = b'[]'
+                if fault == 'log': (output / 'check-00.log').unlink()
+            (output / 'summary.json').write_bytes(raw)
+            return 0
+
+        def read(path, *args):
+            if path.parent.name == 'phase-1':
+                if fault == 'read': raise OSError('private-value-' + str(self.root))
+                if fault == 'metadata':
+                    fields = list(path.lstat()); fields[6] += 1
+                    with patch.object(self.c.os, 'fstat', return_value=os.stat_result(fields)):
+                        return original_read(path, *args)
+            return original_read(path, *args)
+
+        with patch.object(self.c, 'current_context', return_value=self.context), \
+             patch.object(self.c, 'retained_output', side_effect=allocate), \
+             patch.object(run_checks, 'build_commands', side_effect=discover), \
+             patch.object(run_checks, 'run_commands', side_effect=runner), \
+             patch.object(self.c, 'read_owned', side_effect=read), \
+             patch.object(self.c, 'emit') as emit, contextlib.redirect_stderr(io.StringIO()) as errors:
+            code = self.c.main(['maintained'])
+        return code, json.loads(errors.getvalue()) if errors.getvalue() else None, counts, emit
+
+    def test_diagnostic_success_control_preserves_single_execution_and_receipt(self):
+        code, report, counts, emit = self.diagnostic_run()
+        self.assertEqual(code, 0)
+        self.assertIsNone(report)
+        self.assertEqual(counts['run'], 2)
+        self.assertEqual(counts['allocate'], 2)
+        emit.assert_called_once()
+        self.c.validate_receipt(emit.call_args.args[0], 'maintained', self.context)
+
+    def test_diagnostic_distinguishes_summary_read_decode_and_schema(self):
+        for fault, stage, category in [('read', 'native_summary_read', 'filesystem'),
+                                       ('decode', 'native_summary_decode', 'decode'),
+                                       ('json', 'native_summary_decode', 'json'),
+                                       ('schema', 'native_summary_validate', 'guard'),
+                                       ('log', 'native_log_metadata', 'filesystem')]:
+            with self.subTest(fault=fault):
+                # Each case owns a different retained directory, even on failure.
+                previous = self.root; self.root = previous / fault; self.root.mkdir()
+                code, report, counts, emit = self.diagnostic_run(fault)
+                self.root = previous
+                self.assertEqual(code, 1)
+                self.assertEqual(report.get('stage'), stage)
+                self.assertEqual(report.get('category'), category)
+                self.assertNotIn('private-value', json.dumps(report))
+                self.assertEqual(counts['run'], 1)
+                self.assertEqual(counts['allocate'], 1)
+                emit.assert_not_called()
+
+    def test_diagnostic_discovery_and_allocation_do_not_repeat_prechecks(self):
+        for fault, stage, category in [('discover', 'maintained_discovery', 'guard'),
+                                       ('allocate', 'maintained_allocate', 'filesystem')]:
+            with self.subTest(fault=fault):
+                previous = self.root; self.root = previous / fault; self.root.mkdir()
+                code, report, counts, emit = self.diagnostic_run(fault)
+                self.root = previous
+                self.assertEqual(code, 1)
+                self.assertEqual(report.get('stage'), stage)
+                self.assertEqual(report.get('category'), category)
+                self.assertEqual(counts['run'], 1)
+                self.assertEqual(counts['discover'], 1)
+                self.assertNotIn('private-value', json.dumps(report))
+                emit.assert_not_called()
+
+    def test_diagnostic_metadata_mismatch_keeps_guard_and_reports_only_field_names(self):
+        code, report, counts, emit = self.diagnostic_run('metadata')
+        self.assertEqual(code, 1)
+        self.assertEqual(report.get('stage'), 'native_summary_read')
+        self.assertEqual(report.get('category'), 'guard')
+        self.assertEqual(report.get('reason'), 'metadata_mismatch')
+        self.assertEqual(report.get('fields'), ['st_size'])
+        self.assertEqual(counts['run'], 1)
+        self.assertNotIn(str(self.root), json.dumps(report))
+        emit.assert_not_called()
+
+    def test_diagnostic_exception_categories_are_fixed_and_never_raw_messages(self):
+        for exc, category in [(KeyboardInterrupt('private-value'), 'interrupted'),
+                              (RuntimeError('private-value'), 'unexpected'),
+                              (OSError('private-value'), 'filesystem')]:
+            with self.subTest(category=category), \
+                 patch.object(self.c, 'current_context', side_effect=exc), \
+                 patch.object(self.c, 'emit') as emit, contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(self.c.main(['maintained']), 1)
+            report = json.loads(errors.getvalue())
+            self.assertEqual(report.get('stage'), 'context')
+            self.assertEqual(report.get('category'), category)
+            self.assertNotIn('private-value', errors.getvalue())
+            self.assertLess(len(errors.getvalue()), 512)
+            emit.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

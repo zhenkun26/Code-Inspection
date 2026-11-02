@@ -30,6 +30,48 @@ PLATFORM = 'windows-2025-cpython-3.13'
 CONTEXT_KEYS = {'sha', 'tree', 'workflow_ref', 'workflow_sha256', 'run_id',
                 'run_attempt', 'platform'}
 KINDS = {'maintained', 'mutations', 'observe', 'optimized', 'aggregate'}
+STAT_FIELDS = ('st_mode', 'st_ino', 'st_dev', 'st_nlink', 'st_uid',
+               'st_gid', 'st_size', 'st_atime', 'st_mtime', 'st_ctime')
+DIAGNOSTIC_STAGES = {'context', 'prerequisite', 'maintained', 'mutations',
+                     'observe', 'aggregate', 'output', 'native_allocate',
+                     'native_execute', 'maintained_discovery', 'maintained_allocate',
+                     'maintained_execute', 'maintained_receipt'} | {
+    prefix + suffix for prefix in ('native', 'maintained', 'checks')
+    for suffix in ('_summary_read', '_summary_decode', '_summary_validate', '_log_metadata')}
+
+
+class MetadataMismatch(ValueError):
+    def __init__(self, before, opened):
+        super().__init__('CI file metadata mismatch')
+        # Compare the same tuple positions as stat_result equality, not the
+        # higher-resolution named timestamp attributes. Never retain values.
+        self.fields = [name for index, name in enumerate(STAT_FIELDS)
+                       if before[index] != opened[index]]
+
+
+class ReceiptFailure(ValueError):
+    def __init__(self, stage, error):
+        super().__init__('CI receipt phase failed')
+        self.stage = stage if stage in DIAGNOSTIC_STAGES else 'unknown'
+        self.category = ('interrupted' if isinstance(error, KeyboardInterrupt) else
+                         'json' if isinstance(error, json.JSONDecodeError) else
+                         'decode' if isinstance(error, UnicodeError) else
+                         'filesystem' if isinstance(error, OSError) else
+                         'guard' if isinstance(error, ValueError) else 'unexpected')
+        self.reason = 'metadata_mismatch' if isinstance(error, MetadataMismatch) else 'exception'
+        self.fields = ([name for name in STAT_FIELDS if name in error.fields]
+                       if isinstance(error, MetadataMismatch) else [])
+
+
+@contextlib.contextmanager
+def diagnostic(stage):
+    """Add fixed failure context once; never retry, recover, or emit raw errors."""
+    try:
+        yield
+    except ReceiptFailure:
+        raise
+    except (Exception, KeyboardInterrupt) as error:
+        raise ReceiptFailure(stage, error) from None
 
 
 def require(condition):
@@ -88,7 +130,9 @@ def read_owned(path, limit=FILE_LIMIT):
     info = owned_info(path)
     require(info.st_size <= limit)
     with path.open('rb') as handle:
-        require(os.fstat(handle.fileno()) == info)
+        opened = os.fstat(handle.fileno())
+        if opened != info:
+            raise MetadataMismatch(info, opened)
         data = handle.read(limit + 1)
     require(len(data) <= limit)
     return data
@@ -187,38 +231,50 @@ def retained_output():
     return Path(temporary_directory().name)
 
 
-def successful_checks(output, commands):
-    summary = strict_json(read_owned(output / 'summary.json').decode('utf-8'), FILE_LIMIT)
-    require(type(summary) is list and len(summary) == len(commands))
-    for number, (row, command) in enumerate(zip(summary, commands)):
-        expected = {'command', 'status', 'exit_code', 'duration_seconds', 'log'}
-        cases = [arg for arg in command if arg.startswith('validation.lifecycle.test_lifecycle.Lifecycle.')]
-        if cases:
-            expected.add('test_cases')
-        require(type(row) is dict and set(row) == expected)
-        require(row['command'] == command[1:] and row['status'] == 'PASS'
-                and type(row['exit_code']) is int and row['exit_code'] == 0
-                and row['log'] == 'check-%02d.log' % number)
-        require(type(row['duration_seconds']) in (float, int)
-                and math.isfinite(row['duration_seconds']) and row['duration_seconds'] >= 0)
-        if cases:
-            require(row['test_cases'] == cases)
-        owned_info(output / ('check-%02d.log' % number))
+def successful_checks(output, commands, prefix='checks'):
+    require(prefix in {'checks', 'native', 'maintained'})
+    with diagnostic(prefix + '_summary_read'):
+        raw = read_owned(output / 'summary.json')
+    with diagnostic(prefix + '_summary_decode'):
+        summary = strict_json(raw.decode('utf-8'), FILE_LIMIT)
+    with diagnostic(prefix + '_summary_validate'):
+        require(type(summary) is list and len(summary) == len(commands))
+        for number, (row, command) in enumerate(zip(summary, commands)):
+            expected = {'command', 'status', 'exit_code', 'duration_seconds', 'log'}
+            cases = [arg for arg in command if arg.startswith('validation.lifecycle.test_lifecycle.Lifecycle.')]
+            if cases:
+                expected.add('test_cases')
+            require(type(row) is dict and set(row) == expected)
+            require(row['command'] == command[1:] and row['status'] == 'PASS'
+                    and type(row['exit_code']) is int and row['exit_code'] == 0
+                    and row['log'] == 'check-%02d.log' % number)
+            require(type(row['duration_seconds']) in (float, int)
+                    and math.isfinite(row['duration_seconds']) and row['duration_seconds'] >= 0)
+            if cases:
+                require(row['test_cases'] == cases)
+            with diagnostic(prefix + '_log_metadata'):
+                owned_info(output / ('check-%02d.log' % number))
 
 
 def run_maintained(context):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', CODE_INSPECTION_KEEP_TEST_ARTIFACTS='1')
     native = [[sys.executable, *mode, '-B', 'validation/test_windows_manifests.py']
               for mode in ([], ['-O'])]
-    native_output = retained_output()
-    require(run_checks.run_commands(native, native_output, env) == 0)
-    successful_checks(native_output, native)
-    commands = run_checks.build_commands(ROOT)
-    output = retained_output()
-    require(run_checks.run_commands(commands, output, env) == 0)
-    successful_checks(output, commands)
-    return receipt_json('maintained', context, [dict(id=name, status='PASS', exit_code=0)
-                                              for name in maintained_ids()])
+    with diagnostic('native_allocate'):
+        native_output = retained_output()
+    with diagnostic('native_execute'):
+        require(run_checks.run_commands(native, native_output, env) == 0)
+    successful_checks(native_output, native, 'native')
+    with diagnostic('maintained_discovery'):
+        commands = run_checks.build_commands(ROOT)
+    with diagnostic('maintained_allocate'):
+        output = retained_output()
+    with diagnostic('maintained_execute'):
+        require(run_checks.run_commands(commands, output, env) == 0)
+    successful_checks(output, commands, 'maintained')
+    with diagnostic('maintained_receipt'):
+        return receipt_json('maintained', context, [dict(id=name, status='PASS', exit_code=0)
+                                                  for name in maintained_ids()])
 
 
 def successful_mutations(output, cases):
@@ -295,22 +351,30 @@ def main(argv=None):
     parser.add_argument('phase', choices=['maintained', 'mutations', 'observe', 'aggregate'])
     args = parser.parse_args(argv)
     try:
-        context = current_context(os.environ)
+        with diagnostic('context'):
+            context = current_context(os.environ)
         if args.phase == 'maintained':
-            raw = run_maintained(context)
+            with diagnostic('maintained'):
+                raw = run_maintained(context)
         else:
-            maintained = upstream(os.environ, context)
-            if args.phase == 'mutations':
-                raw = run_mutations(context)
-            elif args.phase == 'observe':
-                raw = run_observation(context)
-            else:
-                raw = aggregate(os.environ, context, maintained)
-        emit(raw, os.environ)
+            with diagnostic('prerequisite'):
+                maintained = upstream(os.environ, context)
+            with diagnostic(args.phase):
+                if args.phase == 'mutations':
+                    raw = run_mutations(context)
+                elif args.phase == 'observe':
+                    raw = run_observation(context)
+                else:
+                    raw = aggregate(os.environ, context, maintained)
+        with diagnostic('output'):
+            emit(raw, os.environ)
         return 0
-    except (Exception, KeyboardInterrupt):
+    except (Exception, KeyboardInterrupt) as error:
         # No untrusted receipt contents, paths or raw exceptions reach CI output.
-        print(encode(dict(event='CI_RECEIPT', phase=args.phase, result='FAIL')), file=sys.stderr)
+        failure = error if isinstance(error, ReceiptFailure) else ReceiptFailure('unknown', error)
+        print(encode(dict(event='CI_RECEIPT', phase=args.phase, result='FAIL',
+                          stage=failure.stage, category=failure.category,
+                          reason=failure.reason, fields=failure.fields)), file=sys.stderr)
         return 1
 
 
