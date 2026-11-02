@@ -32,6 +32,10 @@ CONTEXT_KEYS = {'sha', 'tree', 'workflow_ref', 'workflow_sha256', 'run_id',
 KINDS = {'maintained', 'mutations', 'observe', 'optimized', 'aggregate'}
 STAT_FIELDS = ('st_mode', 'st_ino', 'st_dev', 'st_nlink', 'st_uid',
                'st_gid', 'st_size', 'st_atime', 'st_mtime', 'st_ctime')
+IS_WINDOWS = os.name == 'nt'
+FILE_FIELDS = STAT_FIELDS[:7]
+WINDOWS_FIELDS = ('st_birthtime_ns', 'st_file_attributes', 'st_reparse_tag')
+DIAGNOSTIC_FIELDS = STAT_FIELDS + ('st_atime_ns', 'st_mtime_ns', 'st_ctime_ns') + WINDOWS_FIELDS
 DIAGNOSTIC_STAGES = {'context', 'prerequisite', 'maintained', 'mutations',
                      'observe', 'aggregate', 'output', 'native_allocate',
                      'native_execute', 'maintained_discovery', 'maintained_allocate',
@@ -41,11 +45,10 @@ DIAGNOSTIC_STAGES = {'context', 'prerequisite', 'maintained', 'mutations',
 
 
 class MetadataMismatch(ValueError):
-    def __init__(self, before, opened):
+    def __init__(self, before, opened, fields=STAT_FIELDS):
         super().__init__('CI file metadata mismatch')
-        # Compare the same tuple positions as stat_result equality, not the
-        # higher-resolution named timestamp attributes. Never retain values.
-        self.fields = [name for index, name in enumerate(STAT_FIELDS)
+        # Only fixed field names escape, never paths or metadata values.
+        self.fields = [name for index, name in enumerate(fields)
                        if before[index] != opened[index]]
 
 
@@ -59,7 +62,7 @@ class ReceiptFailure(ValueError):
                          'filesystem' if isinstance(error, OSError) else
                          'guard' if isinstance(error, ValueError) else 'unexpected')
         self.reason = 'metadata_mismatch' if isinstance(error, MetadataMismatch) else 'exception'
-        self.fields = ([name for name in STAT_FIELDS if name in error.fields]
+        self.fields = ([name for name in DIAGNOSTIC_FIELDS if name in error.fields]
                        if isinstance(error, MetadataMismatch) else [])
 
 
@@ -119,22 +122,64 @@ def valid_context(context):
         context['workflow_ref']) is not None)
 
 
-def owned_info(path):
-    info = path.lstat()
-    require(stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+def metadata(info, fields):
+    values = tuple(getattr(info, name, None) for name in fields)
+    require(all(type(value) is int for value in values))
+    return values
+
+
+def regular_info(info):
+    mode, links, size = metadata(info, ('st_mode', 'st_nlink', 'st_size'))
+    require(stat.S_ISREG(mode) and links == 1 and size >= 0)
+    if IS_WINDOWS:
+        device, inode, _, attributes, tag = metadata(
+            info, ('st_dev', 'st_ino', *WINDOWS_FIELDS))
+        require(device > 0 and inode > 0 and (attributes & 1024) == 0 and tag == 0)
     return info
 
 
+def owned_info(path):
+    return regular_info(path.lstat())
+
+
+def same_metadata(before, after, fields):
+    previous, current = metadata(before, fields), metadata(after, fields)
+    if previous != current:
+        raise MetadataMismatch(previous, current, fields)
+
+
 def read_owned(path, limit=FILE_LIMIT):
-    """Read a fixed file in our freshly allocated, retained output directory."""
+    """Read a fixed file in the trusted checkout or fresh owned CI output.
+
+    These observations detect changes, not an atomic snapshot or protection
+    against a hostile writer restoring metadata between observations.
+    """
     info = owned_info(path)
     require(info.st_size <= limit)
+    stable = FILE_FIELDS + ('st_mtime_ns', 'st_ctime_ns') + (WINDOWS_FIELDS if IS_WINDOWS else ())
+    # Windows CPython 3.13 path stat uses creation time for st_ctime, while
+    # fstat uses change time. Compare explicit birth time across APIs instead;
+    # retain change-time checks between observations of the SAME API/handle.
+    common = (FILE_FIELDS + ('st_mtime_ns',) + WINDOWS_FIELDS) if IS_WINDOWS else stable
+    metadata(info, stable)  # Missing required observations fail before payload.
     with path.open('rb') as handle:
         opened = os.fstat(handle.fileno())
-        if opened != info:
+        if IS_WINDOWS:
+            same_metadata(info, opened, common + ('st_atime_ns',))
+        elif opened != info:
+            # Preserve the original POSIX pre-open tuple comparison.
             raise MetadataMismatch(info, opened)
+        regular_info(opened)
+        metadata(opened, stable)
         data = handle.read(limit + 1)
-    require(len(data) <= limit)
+        require(len(data) <= limit and len(data) == opened.st_size)
+        after = regular_info(os.fstat(handle.fileno()))
+        same_metadata(opened, after, stable)
+        # Hold the original handle during the path recheck; never reopen or
+        # retry a replaced path. Our own read may change access time only.
+        final = owned_info(path)
+        same_metadata(info, final, stable)
+        same_metadata(after, final, common)
     return data
 
 

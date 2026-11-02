@@ -6,11 +6,12 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -162,6 +163,17 @@ class CheckRunner(unittest.TestCase):
 
 class CiReceipts(unittest.TestCase):
     """Synthetic protocol tests never represent a hosted or native CI run."""
+    class ChangedSize(tuple):
+        """Change only size; retain named ns/birth/Windows stat attributes."""
+        def __new__(cls, original):
+            fields = list(original); fields[6] += 1
+            result = tuple.__new__(cls, fields)
+            result.original = original
+            return result
+
+        def __getattr__(self, name):
+            return self[6] if name == 'st_size' else getattr(self.original, name)
+
     def setUp(self):
         retained = patch.dict(os.environ, {'CODE_INSPECTION_KEEP_TEST_ARTIFACTS': '1'})
         retained.start()
@@ -470,8 +482,8 @@ class CiReceipts(unittest.TestCase):
             if path.parent.name == 'phase-1':
                 if fault == 'read': raise OSError('private-value-' + str(self.root))
                 if fault == 'metadata':
-                    fields = list(path.lstat()); fields[6] += 1
-                    with patch.object(self.c.os, 'fstat', return_value=os.stat_result(fields)):
+                    changed = self.ChangedSize(path.lstat())
+                    with patch.object(self.c.os, 'fstat', return_value=changed):
                         return original_read(path, *args)
             return original_read(path, *args)
 
@@ -538,6 +550,25 @@ class CiReceipts(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(report))
         emit.assert_not_called()
 
+    def test_size_fault_preserves_windows_named_metadata_and_diagnostic(self):
+        source = OwnedReceiptReads.Snapshot()
+        changed = self.ChangedSize(source)
+        for name in ('st_atime_ns', 'st_mtime_ns', 'st_ctime_ns', 'st_birthtime_ns',
+                     'st_file_attributes', 'st_reparse_tag'):
+            self.assertEqual(getattr(changed, name), getattr(source, name))
+        self.assertEqual(changed.st_size, source.st_size + 1)
+        fixture = OwnedReceiptReads().fake_file(before=source, opened=changed)
+        with patch.object(self.c, 'IS_WINDOWS', True), \
+             patch.object(self.c.os, 'fstat', fixture[2]):
+            with self.assertRaises(self.c.ReceiptFailure) as error:
+                with self.c.diagnostic('native_summary_read'):
+                    self.c.read_owned(fixture[0], 32)
+        self.assertEqual(error.exception.stage, 'native_summary_read')
+        self.assertEqual(error.exception.category, 'guard')
+        self.assertEqual(error.exception.reason, 'metadata_mismatch')
+        self.assertEqual(error.exception.fields, ['st_size'])
+        fixture[1].read.assert_not_called()
+
     def test_diagnostic_exception_categories_are_fixed_and_never_raw_messages(self):
         for exc, category in [(KeyboardInterrupt('private-value'), 'interrupted'),
                               (RuntimeError('private-value'), 'unexpected'),
@@ -552,6 +583,195 @@ class CiReceipts(unittest.TestCase):
             self.assertNotIn('private-value', errors.getvalue())
             self.assertLess(len(errors.getvalue()), 512)
             emit.assert_not_called()
+
+
+class OwnedReceiptReads(unittest.TestCase):
+    """Synthetic Windows metadata is protocol evidence, never native acceptance."""
+    class Snapshot(tuple):
+        """Keep legacy stat tuple equality separate from named nanoseconds."""
+        def __new__(cls, changes=None, missing=()):
+            fields = ('st_mode', 'st_ino', 'st_dev', 'st_nlink', 'st_uid', 'st_gid',
+                      'st_size', 'st_atime', 'st_mtime', 'st_ctime')
+            values = dict(zip(fields, (stat.S_IFREG | 0o600, 17, 5, 1, 100, 100,
+                                       7, 100.125, 200.25, 300.5)))
+            values.update(st_atime_ns=100125000000, st_mtime_ns=200250000000,
+                          st_ctime_ns=300500000000, st_birthtime_ns=300500000000,
+                          st_file_attributes=128, st_reparse_tag=0)
+            values.update(changes or {})
+            result = tuple.__new__(cls, (int(values[name]) if index >= 7 else values[name]
+                                        for index, name in enumerate(fields)))
+            for name, value in values.items():
+                if name not in missing:
+                    setattr(result, name, value)
+            return result
+
+    def fake_file(self, *, before=None, opened=None, after=None, final=None, data=b'receipt'):
+        before = self.Snapshot() if before is None else before
+        opened = self.Snapshot() if opened is None else opened
+        after = opened if after is None else after
+        final = before if final is None else final
+        handle = SimpleNamespace(entered=False, closed=False, read=Mock(return_value=data),
+                                 fileno=Mock(return_value=91))
+
+        class Context:
+            def __enter__(_):
+                handle.entered = True
+                return handle
+            def __exit__(_, *args):
+                handle.closed = True
+
+        def path_stat():
+            if path.lstat.call_count == 1:
+                return before
+            self.assertTrue(handle.entered and not handle.closed, 'final path check must hold the opened handle')
+            return final
+
+        path = SimpleNamespace(lstat=Mock(side_effect=path_stat), open=Mock(return_value=Context()))
+        return path, handle, Mock(side_effect=[opened, after])
+
+    def read(self, fixture, *, windows=True, limit=32):
+        path, _, fstat = fixture
+        with patch.object(ci_receipts, 'IS_WINDOWS', windows, create=True), \
+             patch.object(ci_receipts.os, 'fstat', fstat):
+            return ci_receipts.read_owned(path, limit)
+
+    def reject(self, fixture, *, windows=True, limit=32, before_payload=False):
+        # Unexpected runtime errors remain ERROR; never relabel them as a
+        # qualifying assertion failure in red or mutation evidence.
+        with self.assertRaises(ValueError):
+            self.read(fixture, windows=windows, limit=limit)
+        if before_payload:
+            fixture[1].read.assert_not_called()
+
+    def test_windows_creation_and_change_times_are_distinct_but_birth_identity_matches(self):
+        opened = self.Snapshot(dict(st_ctime=400.75, st_ctime_ns=400750000000))
+        fixture = self.fake_file(opened=opened)
+        try:
+            actual = self.read(fixture)
+        except ValueError:
+            self.fail('Windows creation time must not be equated to handle change time')
+        self.assertEqual(actual, b'receipt')
+        self.assertEqual(fixture[2].call_count, 2)
+        self.assertEqual(fixture[0].lstat.call_count, 2)
+        fixture[1].read.assert_called_once_with(33)
+        self.assertTrue(fixture[1].closed)
+
+    def test_posix_original_tuple_change_time_mismatch_rejects_before_payload(self):
+        fixture = self.fake_file(opened=self.Snapshot(dict(st_ctime=400.75, st_ctime_ns=400750000000)))
+        self.reject(fixture, windows=False, before_payload=True)
+
+    def test_windows_every_common_field_mismatch_rejects_before_payload(self):
+        changes = dict(st_mode=stat.S_IFIFO | 0o600, st_ino=18, st_dev=6, st_nlink=2,
+                       st_uid=101, st_gid=101, st_size=8, st_atime_ns=100125000001,
+                       st_mtime_ns=200250000001, st_birthtime_ns=300500000001,
+                       st_file_attributes=32, st_reparse_tag=1)
+        for name, value in changes.items():
+            with self.subTest(field=name):
+                self.reject(self.fake_file(opened=self.Snapshot({name: value})), before_payload=True)
+
+    def test_windows_missing_or_noninteger_required_fields_reject_before_payload(self):
+        names = ('st_mode', 'st_ino', 'st_dev', 'st_nlink', 'st_uid', 'st_gid', 'st_size',
+                 'st_atime_ns', 'st_mtime_ns', 'st_ctime_ns', 'st_birthtime_ns',
+                 'st_file_attributes', 'st_reparse_tag')
+        for location in ('before', 'opened'):
+            for name in names:
+                original = getattr(self.Snapshot(), name)
+                for snapshot in (self.Snapshot(missing=(name,)),
+                                 self.Snapshot({name: float(original)}), self.Snapshot({name: True})):
+                    with self.subTest(location=location, field=name, kind=type(getattr(snapshot, name, None)).__name__):
+                        self.reject(self.fake_file(**{location: snapshot}), before_payload=True)
+
+    def test_windows_unknown_identity_reparse_and_nonregular_metadata_rejects_before_payload(self):
+        for change in (dict(st_ino=0), dict(st_dev=0), dict(st_nlink=2),
+                       dict(st_mode=stat.S_IFDIR | 0o700), dict(st_file_attributes=128 | 1024),
+                       dict(st_reparse_tag=1)):
+            snapshot = self.Snapshot(change)
+            with self.subTest(change=change):
+                self.reject(self.fake_file(before=snapshot, opened=snapshot), before_payload=True)
+
+    def test_matching_missing_or_invalid_nanoseconds_do_not_establish_identity(self):
+        for name in ('st_birthtime_ns', 'st_atime_ns', 'st_mtime_ns', 'st_ctime_ns'):
+            for snapshot in (self.Snapshot(missing=(name,)), self.Snapshot({name: True}),
+                             self.Snapshot({name: float(getattr(self.Snapshot(), name))})):
+                with self.subTest(field=name, kind=type(getattr(snapshot, name, None)).__name__):
+                    self.reject(self.fake_file(before=snapshot, opened=snapshot), before_payload=True)
+
+    def test_same_handle_postread_changes_reject_on_both_platforms(self):
+        changes = dict(st_mode=stat.S_IFIFO | 0o600, st_ino=18, st_dev=6, st_nlink=2,
+                       st_uid=101, st_gid=101, st_size=8, st_mtime_ns=200250000001,
+                       st_ctime_ns=300500000001)
+        for windows in (False, True):
+            selected = dict(changes)
+            if windows:
+                selected.update(st_birthtime_ns=300500000001, st_file_attributes=32, st_reparse_tag=1)
+            for name, value in selected.items():
+                fixture = self.fake_file(after=self.Snapshot({name: value}))
+                with self.subTest(windows=windows, field=name):
+                    self.reject(fixture, windows=windows)
+                    fixture[1].read.assert_called_once_with(33)
+
+    def test_final_path_replacement_or_same_path_metadata_change_rejects_while_open(self):
+        changes = dict(st_mode=stat.S_IFIFO | 0o600, st_ino=18, st_dev=6, st_nlink=2,
+                       st_uid=101, st_gid=101, st_size=8, st_mtime_ns=200250000001,
+                       st_ctime_ns=300500000001)
+        for windows in (False, True):
+            selected = dict(changes)
+            if windows:
+                selected.update(st_birthtime_ns=300500000001, st_file_attributes=32, st_reparse_tag=1)
+            for name, value in selected.items():
+                fixture = self.fake_file(final=self.Snapshot({name: value}))
+                with self.subTest(windows=windows, field=name):
+                    self.reject(fixture, windows=windows)
+                    fixture[1].read.assert_called_once_with(33)
+
+    def test_atime_only_postread_changes_are_allowed_on_both_platforms(self):
+        changed = self.Snapshot(dict(st_atime=101.125, st_atime_ns=101125000000))
+        for windows in (False, True):
+            fixture = self.fake_file(after=changed, final=changed)
+            with self.subTest(windows=windows):
+                self.assertEqual(self.read(fixture, windows=windows), b'receipt')
+                self.assertEqual(fixture[2].call_count, 2)
+                self.assertEqual(fixture[0].lstat.call_count, 2)
+
+    def test_declared_limit_short_read_and_extra_bytes_never_return_receipt(self):
+        snapshot = self.Snapshot(dict(st_size=33))
+        self.reject(self.fake_file(before=snapshot, opened=snapshot), before_payload=True)
+        for data in (b'short', b'too-long', b'x' * 33):
+            with self.subTest(length=len(data)):
+                fixture = self.fake_file(data=data)
+                self.reject(fixture)
+                fixture[1].read.assert_called_once_with(33)
+
+    def real_root(self):
+        with patch.dict(os.environ, {'CODE_INSPECTION_KEEP_TEST_ARTIFACTS': '1'}):
+            return Path(temporary_directory().name)
+
+    def test_real_owned_file_positive_and_size_limit_retains_fixture(self):
+        root = self.real_root(); path = root / 'receipt.json'
+        path.write_bytes(b'receipt')
+        self.assertEqual(ci_receipts.read_owned(path, 7), b'receipt')
+        with self.assertRaises(ValueError): ci_receipts.read_owned(path, 6)
+        self.assertEqual(path.read_bytes(), b'receipt')
+
+    @unittest.skipUnless(os.name == 'posix', 'real POSIX owned-link checks')
+    def test_real_owned_symlink_and_hardlink_are_rejected_and_retained(self):
+        root = self.real_root(); path = root / 'receipt.json'
+        path.write_bytes(b'receipt')
+        symbolic = root / 'symbolic'; symbolic.symlink_to(path.name)
+        with self.assertRaises(ValueError): ci_receipts.read_owned(symbolic)
+        linked = root / 'linked'; os.link(path, linked)
+        for candidate in (path, linked):
+            with self.assertRaises(ValueError): ci_receipts.read_owned(candidate)
+        self.assertTrue(symbolic.is_symlink()); self.assertTrue(linked.is_file())
+
+    @unittest.skipUnless(os.name == 'posix' and hasattr(os, 'mkfifo'), 'real POSIX owned-special-file checks')
+    def test_real_owned_directory_and_fifo_are_rejected_before_open_and_retained(self):
+        root = self.real_root(); fifo = root / 'receipt-pipe'
+        os.mkfifo(fifo, 0o600)
+        with patch.object(Path, 'open', side_effect=AssertionError('special entry must not be opened')):
+            for candidate in (root, fifo):
+                with self.assertRaises(ValueError): ci_receipts.read_owned(candidate)
+        self.assertTrue(root.is_dir()); self.assertTrue(stat.S_ISFIFO(fifo.lstat().st_mode))
 
 
 if __name__ == '__main__':
