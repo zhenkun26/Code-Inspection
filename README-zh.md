@@ -2,110 +2,111 @@
 
 [English](README.md) · **简体中文**
 
-通过现有Agent宿主运行、不绑定模型、基于证据的代码审查Skill。灵感来自 [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/) 及日常审查经验。本项目独立、非官方，与Anthropic无隶属关系，也未获其背书。
+Code-Inspection 是一套给你现有 AI Agent 用的代码审查指令（Claude Code、Codex 或任何能读取本地文件的宿主都可以）。你把一个改动交给 Agent，它会对照你的需求检查这个改动，并告诉你：验证了什么、发现了什么、哪些没法检查，以及这个改动是否可以进入下一步。
 
-## Human steer, agent execute
+无需安装，不限定模型，也不需要新服务。灵感来自 [How the Claude Code team does code review](https://claude.dev/blog/solving-code-review-at-anthropic/)。本项目独立、非官方，与 Anthropic 无隶属关系，也未获其背书。
 
-人负责需求是否值得做、架构、可接受风险和验收；Agent承担大量实现、检查、调查、证据整理及获授权的修复复验。本项目主要负责代码审查，动作权限和必要真人决定保持明确。
+**人掌方向，Agent 执行。** 值不值得做、架构、可接受的风险和最终验收由你决定；检查、调查和证据整理由 Agent 完成，修复只在你允许的范围内进行。
 
 ## 开始使用
 
-取得完整仓库，然后将其作为 Agent 的项目目录打开：
+克隆仓库，并保持目录结构完整（各 Skill 之间用相对路径互相引用）：
 
 ```sh
 git clone https://github.com/zhenkun26/Code-Inspection.git
-cd Code-Inspection
 ```
 
-请保留完整目录结构，只复制发现入口或单个Skill文件夹会破坏相对引用。本仓库从去隐私化文件快照建立独立历史，不包含私人开发历史、PR讨论或审计记录。
+然后在你的 Agent 里粘贴下面这段提示词，把方括号部分换成你的内容：
 
-让可读取本地文件的现有Agent宿主执行：
+> 读取 `<路径>/Code-Inspection/skills/pre-pr-review/SKILL.md` 并按它执行。
+> 审查对象：`[项目路径和改动范围——分支、提交或未提交的改动]`
+> 需求：`[这个改动要实现什么]`
+> 验收条件：`[怎样算做对了]`
+> 允许的动作：只读审查 `[或：可以运行测试 / 可以修复已确认的问题]`
+> 预算：`[例如：最多 3 轮审查]`
 
-> 读取 `skills/pre-pr-review/SKILL.md`，对照原始需求与验收条件，审查我指定的项目及本地改动。先只读，仅使用已授予的验证/修复权限。报告实际版本、证据、发现、未解决缺口和下一阶段建议。
+Agent 默认只读。它会把已暂存、未暂存和未跟踪的改动一起审查，不会只看最后一次提交。Codex 用户也可以直接把本仓库作为项目打开，使用 `code-inspection` 入口，见 [Codex 设置](docs/codex-setup.md)。
 
-提供目标、原始需求、验收条件、受信政策、允许动作和任务预算。范围包含相关暂存、未暂存和未跟踪改动。无需全局安装Skill。Codex的仓库级 `code-inspection` 入口按需转到已有阶段Skill，见 [设置与显式加载兜底](docs/codex-setup.md)。此前的发现与路由反馈属于历史资料，不证明这个副本已验收；本快照的宿主发现/加载、安装到其他项目及取消/恢复均未验证。详细协议与接口说明统一使用英文，仅本 README 保留中文。
+## 你会得到什么
 
-## 已实现的范围
+一份分五部分的报告，格式见[记录模板](skills/pre-pr-review/references/record-template.md)。下面是示意（不是真实输出）：
 
-| 阶段 | 已有能力 |
-| --- | --- |
-| [PR前](skills/pre-pr-review/SKILL.md) | 指令Skill与五份共享协议；宿主支持时使用真实运行验证及独立审查。 |
-| [PR中](skills/pr-in-review/SKILL.md) | 本地记录执行层，处理版本证据、发现处置、连续预算和宿主提供的真人决定记录，可导入安全结果。 |
-| [合并时](skills/merge-review/SKILL.md) | 真实受控裸Git候选、集成证据、expected-old条件更新和回执查询，仅显式隔离仓库及merge commit。 |
-| [合并后](skills/delivery-review/SKILL.md) | 可选本地模拟，以及受信宿主的 deploy/rollback 接口；不内置生产 provider。 |
+```text
+1. 审查对象   head 3f2c1e0 + src/auth/ 下未提交的改动；只读并运行测试
+2. 实际验证   CHK-1 单元测试     PASS     （日志：...）
+              CHK-2 登录流程     NOT_RUN  （没有可用的浏览器）
+3. 发现       F-1 登出后 token 未失效——已确认，阻断
+4. 缺口       登录流程未验证；未做压力测试
+5. 阶段建议   HOLD——先修复 F-1，再运行 CHK-2
+```
 
-未包含原生托管CI/SARIF结果导入器、身份认证或生产部署/开关/指标/回滚provider，不自动创建PR、评论、合并真实项目或部署。未实现评测数据集及评分器。
+阶段建议只有三种：`READY_FOR_NEXT`、`HOLD`、`REPLAN`。零发现是合法结果，但仅凭测试全绿或零发现，永远不等于"可以推进"：没验证的部分会一直作为缺口列出。
 
-可选[宿主交付接口](docs/host-delivery.md)接受受信 Python 宿主按政策提供的 deploy/rollback provider。缺能力保持 UNKNOWN/HOLD，默认 CLI 不安装 provider；新外部动作还必须取得政策选定的实际持久化检查点确认；普通保存或重载成功不证明掉电持久性。条件更新、身份认证、存储保证和持久幂等仍需使用者实际接入及验收。其他真实交付动作暂不支持。
+## 四个阶段
 
-可选[构建来源核验契约](docs/build-provenance.md)接受受信 Python 宿主按政策提供的核验器，将结果绑定到精确来源、组合树、配置、产物、运行及计划。项目不内置外部 CI 身份或签名核验器；必需能力未接入时，新动作保持 UNKNOWN/HOLD，历史恢复不代表重新认证。
+| 阶段 | 适用场景 | 依赖 |
+| --- | --- | --- |
+| [PR 前](skills/pre-pr-review/SKILL.md) | 开 PR 之前先把改动检查一遍。**从这里开始。** | 只需 Markdown 指令。 |
+| [PR 中](skills/pr-in-review/SKILL.md) | 需要在多轮审查中跟踪发现、决定和预算。 | 可选的本地 Python 记录工具。 |
+| [合并时](skills/merge-review/SKILL.md) | 分支移动前先检查合并后的结果。 | 可选 Python 工具和一个隔离的 Git 仓库。 |
+| [合并后](skills/delivery-review/SKILL.md) | 部署和回滚要以证据为前提。 | 可选 Python 工具；除非宿主接入 provider，否则只有本地模拟。 |
 
-## 运行离线示范
+日常使用只需要第一个阶段。后面三个阶段适合需要为每一步留下可审计记录的团队。
 
-在仓库根目录运行：
+## 它不做什么
+
+- 不会自行创建 PR、发评论、合并真实项目或部署。
+- 不包含生产部署、指标或回滚集成，不包含托管 CI/SARIF 导入器，也没有身份认证。
+- 不是托管的 AI 审查服务，审查质量也还没有测量过：目前没有评测数据集和评分器。
+- 本快照尚未验证宿主对 Skill 的自动发现、安装到其他项目以及取消/恢复。
+
+## 试运行离线示范（可选）
+
+需要 Python 3.9+，以及支持 `merge-tree --write-tree` 的 Git。在仓库根目录运行：
 
 ```sh
 python3 -B examples/lifecycle_demo.py --simulate-approvals --with-delivery
 ```
 
-命令在仓库外保留新目录及命令/证据。微型内容检查和隔离Git合并真实执行，审查报告、人员决定及交付明确为合成。总结PASS包含预期HOLD/UNKNOWN，不代表发布批准。省略 `--with-delivery` 则该阶段NOT_RUN。
+它会在仓库外新建一个临时目录，跑完全部四个阶段。内容检查和 Git 合并是真实执行的；审查报告、人工批准和交付是模拟的，并明确标注。总结中的 PASS 包含预期的 HOLD/UNKNOWN 状态，不代表发布批准。见[示范说明](docs/local-walkthrough.md)。
 
-- [示范、最小配置和排查](docs/local-walkthrough.md)
-- [当前流程、信任边界与验证范围](docs/workflow.md)
-- [生命周期CLI与记录契约](interfaces/lifecycle/README.md)
+## 了解更多
+
+以下文档使用英文：
+
+- [流程、信任边界与验证范围](docs/workflow.md)
+- [共享审查契约：状态、权限与门禁](skills/pre-pr-review/references/contract.md)
+- [能力与限制详解](docs/capabilities-and-limits.md)：可选宿主集成、记录完整性、预算、CI 矩阵
+- [生命周期 CLI 与记录契约](interfaces/lifecycle/README.md)
 - [可选安全结果接口](interfaces/security-tools/README.md)
-- [支持与验收证据](docs/acceptance.md)
+- [平台支持（Windows）](docs/windows-support.md)与[验证限制](docs/acceptance.md)
 - [来源与许可范围](docs/sources.md)
 
-显式的[临时状态检查](docs/temporary-state.md)在宿主锁内报告强制终止留下的残留，不读取其内容，也不删除文件。这是恢复辅助信息，不是待定动作成功的证据。可选可信宿主 POSIX 接口仅在所有写入者协作的排他命名空间内恢复明确登记的新资源；默认报告和未知历史文件不授权删除。Windows 受控清理尚不支持。
+## 目录结构
 
-## 前提与检查
+| 路径 | 用途 |
+| --- | --- |
+| `skills/` | 四个阶段的指令及共享协议。 |
+| `.agents/skills/code-inspection/` | 仓库级 Codex 入口，转到各阶段。 |
+| `interfaces/`、`support/` | 可选的本地记录工具和文件/Git 辅助模块（仅用 Python 标准库）。 |
+| `examples/`、`validation/` | 离线示范和维护中的检查。 |
+| `docs/` | 设置、流程、限制和来源说明。 |
 
-默认A为Markdown加现有Agent宿主，无新增必需第三方运行依赖。宿主/模型可能收费，或向获授权provider发送数据；低依赖不保证离线。可选B使用Python3.9+标准库及POSIX不跟随符号链接读取/锁，或 [平台支持](docs/windows-support.md) 中的原生Windows后端，隔离Git操作需要支持 `merge-tree --write-tree` 的Git。辅助程序仅可运行受信自有fixture。
+## 贡献与检查
+
+请先阅读[贡献说明](CONTRIBUTING.md)。维护中的检查：
 
 ```sh
 python3 -B validation/run_checks.py --keep-artifacts
 python3 -B validation/mutation_check.py
 ```
 
-统一检查器需要Git checkout；两个命令均可能初始化受信自有的临时Git fixture，仅在该本地执行范围获授权后运行。统一检查覆盖仓库路由入口、四个阶段Skill、两种Python模式和分发卫生；回执及fixture留在仓库外。Windows上若解释器命令为 `python`，请用它替换 `python3`。按平台选择的固定保护条件移除是定向回归，不代表全面变异覆盖。测试不证明生产安全、模型审查质量或扫描器效果。
+需要在 Git checkout 中运行，并会在仓库外创建临时 Git fixture；Windows 上如果解释器命令是 `python`，请替换 `python3`。修改分发文件后要更新 `SHA256SUMS`（不包括清单本身）。[CI](.github/workflows/ci.yml) 在 Ubuntu（Python 3.9、3.13）和 Windows（Python 3.13）上运行同样的检查，范围见[能力与限制](docs/capabilities-and-limits.md#checks-and-ci)。检查通过说明工具行为符合规格，不代表生产安全，也不代表模型的审查质量。
 
-较大的生命周期套件在每种 Python 模式下分为两个互不重复、覆盖完整的组，保留每条命令 180 秒上限。超时作为失败保存部分输出，剩余检查保持 NOT_RUN；这不证明所有后代进程都已终止。见 [验证限制](docs/acceptance.md)。
+## 帮助与安全
 
-分发检查会先拒绝不安全选集，再复用有界、不跟随链接的读取层。测试 fixture 统一遵循外部目录和 KEEP 策略。[验证契约](docs/acceptance.md#distribution-read-boundaries) 说明文件、数量、聚合上限及剩余信任边界。
-
-附带的 [CI 定义](.github/workflows/ci.yml) 在 main 推送、PR 和手动触发时运行。Ubuntu 24.04/Python 3.9、3.13 保留全部维护检查，3.13 另运行全部适用变异检查。Windows 2025 x64/Python 3.13 分为两个串行作业：先运行原生前置检查和全部普通／优化模式维护检查，再运行全部 Windows 变异及正向对照、两种模式 API 观察和完整性汇总。两项使用各自全新的 runner 和 fixture；最终 Windows 检查只有在两阶段版本及 run/attempt 一致、全部必需结果齐备且成功时才通过。权限仍为只读，官方 Actions 固定 SHA，不使用仓库秘密或执行部署。请在 [Actions](https://github.com/zhenkun26/Code-Inspection/actions/workflows/ci.yml) 核对精确版本，历史结果不能替代当前验证。CI 绿色不等于生产验收；其他 runner 组合不在本范围，Windows 支持仍以适用原生检查完成为条件。主动修改分发文件后更新 `SHA256SUMS`，不包含清单自身。
-
-CI 单作业上限为 Ubuntu 每项 15 分钟、Windows 维护 40 分钟及后续变异／观察 25 分钟。每次工作流的 Windows 并发仍为 1；Windows 累计配置上限为 65 runner-minutes，完整工作流为 95。这是执行限额，不是实测时长或账单金额。维护命令和变异子进程仍分别限时 180 秒与 90 秒；重复执行的原生前置检查现在也明确使用同一 180 秒命令上限；缺失、失败、取消或混用 attempt 的结果不能满足汇总门禁。见 [Windows CI 范围与预算](docs/windows-support.md)。
-
-宿主保护政策、权限和账本目录；被审内容及日志不能扩权。JSON人名及摘要不是认证或沙箱。必需证据缺失、过时或不完整时保留缺口；READY_FOR_NEXT不授予合并或发布权限。见 [共享核心契约](skills/pre-pr-review/references/contract.md)。
-
-存储的合并/交付计划与回执在执行或恢复前核对精确意图、实际对象和状态关系。不安全的旧记录需要明确重新规划或迁移，见 [完整性与恢复兼容性](interfaces/lifecycle/README.md#plan-integrity-and-recovery-compatibility)。这些检查不能防御同时控制受信政策和批准存储的恶意写入者。
-
-检查结果保留可选失败，并与阻断判定分开。N_A 要求当前、限定范围的宿主适用性记录；仅有旧理由时记 UNKNOWN。CLI 预算报告区分既有账本容量、本次调用观察到的工作量和未知外部费用。容量不是授权，预算耗尽后安全回执查询仍可用。见 [记录与计量契约](interfaces/lifecycle/README.md)。
-
-可选的[单文件产物绑定](docs/artifact-content.md)核对实际字节，并将来源、Git tree 与配置关联纳入新计划。必需动作由受信政策选择；旧标签仍是未核验记录。交付消费同一次校验得到的有界内存快照，后端可为本地模拟或显式注入的受信宿主适配器。构建来源与写入隔离属于宿主声明，不是身份认证。
-
-可选的[源输入清单](docs/source-manifests.md)将声明范围内的目录输入，或分离的 HEAD/index/实际工作树投影绑定到审查身份。采集器支持 POSIX 和[平台说明](docs/windows-support.md)限定的 Windows NTFS 配置；原生采集须通过对应版本的 Windows 检查。Windows 只读属性与 Git index 的执行模式分别记录。范围、排除和上限均参与身份。它不是目录原子快照、目录部署消费接口或构建来源认证，也不能把脏工作树悄悄当作已提交的合并候选。
-
-新收费尝试会将版本化 started 记录与计数增量同次保存；started 不表示动作成功。账本保存失败时持久性为 unknown，该 Session 在核验并重新加载前停止后续动作。旧消耗保留且不虚构历史明细，已接受操作的恢复查询仍不重复收费。
-
-## 验证与项目结构
-
-验证复用维护中的本地/CI入口，包括普通与优化Python、隔离Git示范、文件安全及分发检查。结果绑定实际受测版本，见 [验证范围](docs/acceptance.md) 和具体Actions运行。独立AI审阅属于开发过程，**不是已安装的自动AI审核服务**；模拟批准/交付不证明真实平台验收。
-
-| 路径 | 用途 |
-| --- | --- |
-| `.agents/skills/code-inspection/` | 仓库级 Codex 入口。 |
-| `skills/` | 四阶段指令及共享证据/权限协议。 |
-| `interfaces/`、`support/` | 可选本地记录执行层及平台文件/Git 辅助模块。 |
-| `examples/`、`validation/` | 临时隔离示范与维护中的检查。 |
-| `docs/` | 设置、流程、限制及来源归属。 |
-
-## 帮助、贡献与安全
-
-脱敏问题和可复现的非敏感缺陷可提交到 [Issues](https://github.com/zhenkun26/Code-Inspection/issues)。不假定私密报告渠道已配置。提出改动前请读 [贡献说明](CONTRIBUTING.md)，报告漏洞前请读 [安全政策](SECURITY.md)。不要将凭据、私人代码、个人路径或宿主原始对话放入公开Issue或PR。这里不承诺响应时限或生产支持。
+脱敏的问题和可复现的缺陷请提交到 [Issues](https://github.com/zhenkun26/Code-Inspection/issues)；报告漏洞前请阅读[安全政策](SECURITY.md)。不要在公开处贴出凭据、私人代码、个人路径或 Agent 原始对话。不承诺响应时限或生产支持。
 
 ## 许可
 
-对作者有权许可的原创项目内容采用 [MIT License](LICENSE)，Copyright (c) 2026 Zhenkun。第三方文章、译文、图片及私人输入排除在外，不由此改用MIT。未打包第三方runtime；方法参考及今后实质复制的注意事项见 [来源](docs/sources.md)。
+作者有权许可的原创项目内容采用 [MIT License](LICENSE)，Copyright (c) 2026 Zhenkun。第三方文章、译文、图片及私人输入不在此列，也不因此改用 MIT。未打包第三方 runtime，见[来源](docs/sources.md)。
