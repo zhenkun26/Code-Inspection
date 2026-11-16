@@ -27,7 +27,7 @@ For a real host run, record exact version/scope, granted actions and actual entr
 
 The scoped Git metadata filtering, interrupted-check receipts and diagnostic export changes passed all 64 maintained commands (ordinary and optimized CPython 3.9.6 on macOS) and all 221 fixed POSIX guard-removal regressions with successful unmodified controls. Added regressions cover one-file selection in a larger index/tree, excluded Git symlink/gitlink entries, retained global metadata rejection, real POSIX SIGINT, portable interruption handling and public-field filtering. Platform-specific skips are not Windows acceptance. The final workflow upload selection is checked locally as YAML with explicit JSON paths; this revision's hosted upload and native Windows execution remain NOT_RUN until an authorized push and CI run.
 
-The first hosted attempt rejected `runner.temp` in job-level environment configuration before scheduling tests. Report destinations now use step-level environment context, with a regression check for that GitHub context boundary. Hosted acceptance remains pending the corrected revision.
+The first hosted attempt rejected `runner.temp` in job-level environment configuration before scheduling tests. Report destinations now use step-level environment context, with a regression check for that GitHub context boundary. A subsequent hosted check exposed the historical blanket prohibition on artifact uploads; that test now requires the exact authorized JSON allowlist, pinned action, retention and no-overwrite settings while preserving all existing serial-job and gate assertions. Hosted acceptance remains pending the corrected revision.
 
 ## Distribution read boundaries
 

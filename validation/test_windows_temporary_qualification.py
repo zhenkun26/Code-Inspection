@@ -400,7 +400,24 @@ class QualificationProtocol(unittest.TestCase):
             self.assertIn('CI_' + label + '_RESULT: ${{ steps.' + step + '.outcome }}', gate[1])
             self.assertIn('CI_' + label + '_RECEIPT: ${{ steps.' + step + '.outputs.receipt }}', gate[1])
         self.assertNotIn('continue-on-error', workflow)
-        self.assertNotIn('upload-artifact', workflow)
+        # Public diagnostics are now explicitly authorized; active fixture state
+        # still never crosses jobs. Require the exact reviewed upload selection.
+        selections = [(ubuntu, ['maintained.json', 'mutations.json']),
+                      (maintained, ['native.json', 'maintained.json', 'receipt-maintained.json']),
+                      (final, ['mutations.json', 'receipt-mutations.json', 'receipt-observe.json',
+                               'receipt-optimized.json', 'receipt-aggregate.json'])]
+        for job, names in selections:
+            uploads = [step for step in job.split('      - name: ')[1:]
+                       if 'uses: actions/upload-artifact@' in step]
+            self.assertEqual(len(uploads), 1)
+            upload = uploads[0]
+            self.assertIn('uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9', upload)
+            for setting in ('if: ${{ always() }}', 'retention-days: 14',
+                            'include-hidden-files: false', 'overwrite: false'):
+                self.assertIn(setting, upload)
+            paths = upload.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+            self.assertEqual([line.strip() for line in paths.splitlines()],
+                             ['${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/' + name for name in names])
         self.assertNotIn('download-artifact', workflow)
         self.assertNotIn('permissions: write', workflow)
         for line in workflow.splitlines():
