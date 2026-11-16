@@ -307,6 +307,26 @@ class PublicArtifacts(unittest.TestCase):
         self.assertEqual(running[2]['result'], 'NOT_RUN')
         with self.assertRaises(ValueError): self.api.mutation_rows(cases[::-1], [record])
 
+    def test_workflow_report_destinations_use_step_context(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        lines = workflow.splitlines()
+        destinations = [line for line in lines if 'CODE_INSPECTION_CI_REPORT_DIR:' in line]
+        self.assertEqual(len(destinations), 10)
+        self.assertTrue(all(line.startswith('          CODE_INSPECTION_CI_REPORT_DIR:')
+                            and '${{ runner.temp }}/ci-public/' in line for line in destinations))
+        # GitHub rejects runner context in job-level env before scheduling jobs.
+        for index, line in enumerate(lines):
+            if line == '    env:':
+                for child in lines[index + 1:]:
+                    if child and not child.startswith('      '): break
+                    self.assertNotIn('${{ runner.', child)
+        uploads = workflow.split('uses: actions/upload-artifact@')[1:]
+        self.assertEqual(len(uploads), 3)
+        for upload in uploads:
+            paths = upload.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+            self.assertTrue(all(line.strip().startswith('${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/')
+                                and line.strip().endswith('.json') and '*' not in line for line in paths.splitlines()))
+
     def test_context_does_not_relay_other_environment_values(self):
         with patch.dict(os.environ, {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2',
                                     'PRIVATE_TOKEN': 'secret', 'GITHUB_WORKSPACE': '/private/path'}):
