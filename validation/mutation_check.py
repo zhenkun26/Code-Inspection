@@ -1087,8 +1087,11 @@ def killed_result(returncode, stderr):
     return returncode == 1 and 'FAIL:' in stderr and 'ERROR:' not in stderr
 
 
-def run_cases(cases, output, env):
+def run_cases(cases, output, env, public_report=None):
     """Run the existing copied positive controls and guard removals in owned output."""
+    from validation import ci_artifacts
+    public = ci_artifacts.Report(public_report, 'mutations') if public_report else None
+    env = ci_artifacts.child_environment(env)
     sources = []
     for folder in ('interfaces', 'support', 'skills', 'validation', 'docs'):
         for path in (ROOT / folder).rglob('*'):
@@ -1096,7 +1099,12 @@ def run_cases(cases, output, env):
                     and not any(part in {'results', 'history', 'reviews', '__pycache__'} for part in path.relative_to(ROOT).parts)):
                 sources.append(path)
     results = []
+    def checkpoint(active=None):
+        if public is not None:
+            public.write(ci_artifacts.mutation_rows(cases, results, active))
+    checkpoint()
     for name, filename, before, after, test_file, test in cases:
+        checkpoint(len(results))
         copy = output / name
         for path in sources:
             target = copy / path.relative_to(ROOT)
@@ -1113,7 +1121,7 @@ def run_cases(cases, output, env):
         if baseline.returncode != 0:
             record = {'mutation': name, 'result': 'NOT_VERIFIED', 'baseline_exit_code': baseline.returncode,
                       'reason': 'unmodified control failed; mutation not run'}
-            results.append(record); print(json.dumps(record), flush=True)
+            results.append(record); checkpoint(); print(json.dumps(record), flush=True)
             continue
         (target).write_bytes((source.replace(before, after, 1)).encode('utf-8'))
         run = subprocess.run([sys.executable, '-B', test_file, test], cwd=copy, env=env,
@@ -1123,6 +1131,7 @@ def run_cases(cases, output, env):
         record = {'mutation': name, 'result': 'KILLED' if killed else 'NOT_VERIFIED',
                   'baseline_exit_code': baseline.returncode, 'exit_code': run.returncode}
         results.append(record)
+        checkpoint()
         print(json.dumps(record), flush=True)
     (output / 'summary.json').write_bytes((json.dumps(results, indent=2)).encode('utf-8'))
     print(json.dumps({'receipt_directory': str(output), 'scope': str(len(cases)) + ' fixed platform guard removals'}))
@@ -1133,7 +1142,9 @@ def main():
     os.environ['CODE_INSPECTION_KEEP_TEST_ARTIFACTS'] = '1'
     output = Path(temporary_directory().name)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
-    return run_cases(platform_cases(os.name), output, env)
+    from validation import ci_artifacts
+    return run_cases(platform_cases(os.name), output, env,
+                     public_report=ci_artifacts.report_path('mutations'))
 
 
 if __name__ == '__main__':

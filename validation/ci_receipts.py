@@ -19,7 +19,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from validation import mutation_check, run_checks
+from validation import mutation_check, run_checks, ci_artifacts
 from validation import windows_temporary_qualification as qualification
 from validation.test_support import temporary_directory
 
@@ -308,14 +308,14 @@ def run_maintained(context):
     with diagnostic('native_allocate'):
         native_output = retained_output()
     with diagnostic('native_execute'):
-        require(run_checks.run_commands(native, native_output, env) == 0)
+        require(run_checks.run_commands(native, native_output, env, public_report=ci_artifacts.report_path('native')) == 0)
     successful_checks(native_output, native, 'native')
     with diagnostic('maintained_discovery'):
         commands = run_checks.build_commands(ROOT)
     with diagnostic('maintained_allocate'):
         output = retained_output()
     with diagnostic('maintained_execute'):
-        require(run_checks.run_commands(commands, output, env) == 0)
+        require(run_checks.run_commands(commands, output, env, public_report=ci_artifacts.report_path('maintained')) == 0)
     successful_checks(output, commands, 'maintained')
     with diagnostic('maintained_receipt'):
         return receipt_json('maintained', context, [dict(id=name, status='PASS', exit_code=0)
@@ -345,7 +345,7 @@ def run_mutations(context):
     # The trusted existing runner classifies actual stderr as FAIL/no ERROR
     # only after its same-copy positive control passes. Its nonzero result
     # cannot be overridden by a KILLED string or a child-announced directory.
-    require(mutation_check.run_cases(cases, output, env) == 0)
+    require(mutation_check.run_cases(cases, output, env, public_report=ci_artifacts.report_path('mutations')) == 0)
     return receipt_json('mutations', context, successful_mutations(output, cases))
 
 
@@ -388,6 +388,13 @@ def emit(raw, env):
         require(os.fstat(handle.fileno()).st_ino == info.st_ino)
         require(handle.write(line) == len(line))
         handle.flush()
+    receipt = strict_json(raw)
+    artifact = ci_artifacts.report_path('receipt-' + receipt['kind'])
+    if artifact is not None:
+        validate_receipt(raw, receipt['kind'], receipt['context'])
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        with artifact.open('x', encoding='ascii') as handle:
+            handle.write(raw + '\n')
     print(encode(dict(event='CI_RECEIPT', kind=strict_json(raw)['kind'], result='PASS')))
 
 
