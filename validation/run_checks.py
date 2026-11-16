@@ -11,6 +11,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from validation.test_support import temporary_directory
+from validation import ci_artifacts
 
 TESTS = ['security-integration/test_interface.py', 'security-integration/test_helpers.py',
          'security-integration/test_local_files.py', 'lifecycle/test_lifecycle.py',
@@ -83,10 +84,13 @@ def build_commands(root):
     return commands
 
 
-def run_commands(commands, output, env, timeout=180):
+def run_commands(commands, output, env, timeout=180, public_report=None):
     """Retain output as it arrives; a timeout stops checks with cleanup unknown."""
     print(json.dumps({'receipt_directory': str(output)}), flush=True)
     summary = []
+    interrupted = False
+    public = ci_artifacts.Report(public_report, 'checks') if public_report else None
+    env = ci_artifacts.child_environment(env)
     for number, command in enumerate(commands):
         record = {'command': command[1:], 'status': 'NOT_RUN', 'exit_code': None,
                   'duration_seconds': None, 'log': 'check-%02d.log' % number}
@@ -99,6 +103,8 @@ def run_commands(commands, output, env, timeout=180):
         temporary = output / 'summary.json.tmp'
         temporary.write_bytes(json.dumps(summary, indent=2).encode('utf-8'))
         temporary.replace(output / 'summary.json')
+        if public is not None:
+            public.write(ci_artifacts.check_rows(commands, summary))
 
     checkpoint()
     try:
@@ -117,6 +123,10 @@ def run_commands(commands, output, env, timeout=180):
                     except subprocess.TimeoutExpired:
                         record.update(status='TIMEOUT', exit_code=124, timeout_seconds=timeout,
                                       descendant_cleanup='UNKNOWN')
+                    except KeyboardInterrupt:
+                        record.update(status='INTERRUPTED', exit_code=130,
+                                      descendant_cleanup='UNKNOWN')
+                        interrupted = True
                     except OSError as exc:
                         log.write((type(exc).__name__ + ': ' + str(exc) + '\n').encode('utf-8'))
                         record.update(status='ERROR', exit_code=125)
@@ -132,14 +142,14 @@ def run_commands(commands, output, env, timeout=180):
                     log.seek(0, os.SEEK_END)
                     log.seek(max(0, log.tell() - 20000))
                     print(log.read(20000).decode('utf-8', errors='replace'), flush=True)
-            if record['status'] == 'TIMEOUT':
+            if record['status'] in {'TIMEOUT', 'INTERRUPTED'}:
                 # subprocess.run kills its direct child, not a proven descendant tree.
                 break
     finally:
         checkpoint()
         failed = any(record['exit_code'] != 0 for record in summary)
         print(json.dumps({'result': 'FAIL' if failed else 'PASS', 'receipt_directory': str(output)}), flush=True)
-    return int(failed)
+    return 130 if interrupted else int(failed)
 
 
 def main():
@@ -157,7 +167,8 @@ def main():
         os.environ.pop('CODE_INSPECTION_KEEP_TEST_ARTIFACTS', None)
     else:
         os.environ['CODE_INSPECTION_KEEP_TEST_ARTIFACTS'] = old
-    return run_commands(build_commands(ROOT), output, env)
+    return run_commands(build_commands(ROOT), output, env,
+                        public_report=ci_artifacts.report_path('maintained'))
 
 
 if __name__ == '__main__':

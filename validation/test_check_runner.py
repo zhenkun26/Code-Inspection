@@ -152,6 +152,43 @@ class CheckRunner(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual([row['status'] for row in json.loads((self.root / 'summary.json').read_text())], ['PASS', 'PASS'])
 
+    def test_interruption_records_terminal_state_and_stops(self):
+        commands = [[sys.executable, '-B', '-c', 'pass']] * 2
+        def interrupt(command, **kwargs):
+            kwargs['stdout'].write(b'partial output before interruption\n')
+            raise KeyboardInterrupt
+        with patch.object(run_checks.subprocess, 'run', side_effect=interrupt) as run, \
+             contextlib.redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(run_checks.run_commands(commands, self.root, dict(os.environ)), 130)
+        run.assert_called_once()
+        self.check_interrupted_receipt(stdout.getvalue())
+
+    def check_interrupted_receipt(self, stdout):
+        rows = json.loads((self.root / 'summary.json').read_text(encoding='utf-8'))
+        self.assertEqual([row['status'] for row in rows], ['INTERRUPTED', 'NOT_RUN'])
+        self.assertEqual(rows[0]['exit_code'], 130)
+        self.assertEqual(rows[0]['descendant_cleanup'], 'UNKNOWN')
+        self.assertGreaterEqual(rows[0]['duration_seconds'], 0)
+        self.assertIsNone(rows[1]['exit_code'])
+        self.assertFalse((self.root / 'check-01.log').exists())
+        self.assertIn('partial output', (self.root / 'check-00.log').read_text(encoding='utf-8'))
+        self.assertEqual(json.loads(stdout.splitlines()[-1])['result'], 'FAIL')
+
+    @unittest.skipUnless(os.name == 'posix', 'real SIGINT delivery requires POSIX')
+    def test_real_sigint_returns_130_and_retains_partial_output(self):
+        # Signal only this newly created harness, never the unittest process.
+        child = ("import os,signal; print('partial output',flush=True); "
+                 "os.kill(os.getppid(),signal.SIGINT)")
+        script = ("import os,sys; from pathlib import Path; from validation import run_checks; "
+                  "sys.exit(run_checks.run_commands(" + repr([
+                      [sys.executable, '-B', '-c', child],
+                      [sys.executable, '-B', '-c', 'pass']]) + ",Path(sys.argv[1]),dict(os.environ)))")
+        run = subprocess.run([sys.executable, *(['-O'] if sys.flags.optimize else []), '-B',
+                              '-c', script, str(self.root)], cwd=ROOT, capture_output=True,
+                             text=True, timeout=15)
+        self.assertEqual(run.returncode, 130, run.stderr)
+        self.check_interrupted_receipt(run.stdout)
+
     def test_real_timeout_preserves_partial_log_and_marks_remaining_not_run(self):
         marker = self.root / 'must-not-run'
         commands = [
@@ -175,6 +212,130 @@ class CheckRunner(unittest.TestCase):
         self.assertIn('partial stderr', partial)
         self.assertEqual(json.loads(stdout.getvalue().splitlines()[0])['receipt_directory'], str(self.root))
         self.assertEqual(json.loads(stdout.getvalue().splitlines()[-1])['result'], 'FAIL')
+
+
+class PublicArtifacts(unittest.TestCase):
+    def setUp(self):
+        from validation import ci_artifacts
+        self.api = ci_artifacts
+        self.tmp = temporary_directory(); self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.commands = run_checks.build_commands(ROOT)[:1]
+        self.rows = [dict(command=self.commands[0][1:], status='FAIL', exit_code=7,
+                          duration_seconds=0.25, log='/private/secret.log',
+                          error='secret-token', test_cases=['private-case'])]
+
+    def test_public_check_projection_excludes_paths_logs_and_unknown_fields(self):
+        rows = self.api.check_rows(self.commands, self.rows)
+        self.assertEqual(set(rows[0]), {'id', 'command', 'status', 'exit_code', 'duration_seconds'})
+        self.assertNotIn('private', json.dumps(rows)); self.assertNotIn('secret', json.dumps(rows))
+        for status in ('NOT_RUN', 'RUNNING', 'PASS', 'FAIL', 'TIMEOUT', 'ERROR', 'INTERRUPTED'):
+            self.rows[0]['status'] = status
+            self.assertEqual(self.api.check_rows(self.commands, self.rows)[0]['status'], status)
+        self.rows[0].update(status='INTERRUPTED', exit_code=130, descendant_cleanup='UNKNOWN')
+        self.assertEqual(self.api.check_rows(self.commands, self.rows)[0]['descendant_cleanup'], 'UNKNOWN')
+
+    def test_public_projection_refuses_untrusted_commands_and_invalid_values(self):
+        for field, value in [('status', 'private-value'), ('exit_code', True),
+                             ('exit_code', 'private-value'), ('duration_seconds', float('nan')),
+                             ('duration_seconds', -1), ('descendant_cleanup', 'PASS')]:
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                rows = copy.deepcopy(self.rows); rows[0][field] = value
+                self.api.check_rows(self.commands, rows)
+        with self.assertRaises(ValueError):
+            self.api.check_rows([[sys.executable, '-c', 'secret']], self.rows)
+        with self.assertRaises(ValueError): self.api.check_rows(self.commands, [])
+
+    def test_report_checkpoint_is_bounded_diagnostic_and_never_reuses_previous_file(self):
+        path = self.root / 'public' / 'maintained.json'
+        with patch.object(self.api, 'context', return_value={'sha': '1' * 40}):
+            report = self.api.Report(path, 'checks')
+            report.write(self.api.check_rows(self.commands, self.rows))
+            self.rows[0]['status'] = 'INTERRUPTED'; self.rows[0]['exit_code'] = 130
+            report.write(self.api.check_rows(self.commands, self.rows))
+            with self.assertRaises(FileExistsError): self.api.Report(path, 'checks')
+        result = json.loads(path.read_text())
+        self.assertEqual(result['acceptance'], 'NOT_ESTABLISHED')
+        self.assertEqual(result['records'][0]['status'], 'INTERRUPTED')
+        self.assertFalse(path.with_suffix('.tmp').exists())
+        self.assertEqual(list(path.parent.iterdir()), [path])
+        self.assertNotIn('secret', path.read_text())
+
+    def test_check_runner_exports_failure_and_strips_child_report_authority(self):
+        path = self.root / 'public.json'
+        def fail(command, **kwargs):
+            self.assertNotIn(self.api.REPORT_ENV, kwargs['env'])
+            kwargs['stdout'].write(b'private log content')
+            return SimpleNamespace(returncode=7)
+        with patch.object(run_checks.subprocess, 'run', side_effect=fail), \
+             patch.object(self.api, 'context', return_value={'sha': '1' * 40}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = run_checks.run_commands(self.commands, self.root,
+                dict(os.environ, **{self.api.REPORT_ENV: 'private-root'}), public_report=path)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(path.read_text())['records'][0]['status'], 'FAIL')
+        self.assertNotIn('private', path.read_text())
+        self.assertIn('private', (self.root / 'check-00.log').read_text())
+
+    def test_check_runner_exports_interruption_and_remaining_not_run(self):
+        commands = run_checks.build_commands(ROOT)[:2]
+        path = self.root / 'public.json'
+        def interrupt(command, **kwargs):
+            kwargs['stdout'].write(b'private partial log')
+            raise KeyboardInterrupt
+        with patch.object(run_checks.subprocess, 'run', side_effect=interrupt) as run, \
+             patch.object(self.api, 'context', return_value={'sha': '1' * 40}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = run_checks.run_commands(commands, self.root, dict(os.environ), public_report=path)
+        self.assertEqual(code, 130); run.assert_called_once()
+        rows = json.loads(path.read_text())['records']
+        self.assertEqual([row['status'] for row in rows], ['INTERRUPTED', 'NOT_RUN'])
+        self.assertEqual(rows[0]['exit_code'], 130)
+        self.assertEqual(rows[0]['descendant_cleanup'], 'UNKNOWN')
+        self.assertNotIn('private', path.read_text())
+
+    def test_mutation_projection_preserves_incomplete_and_failed_controls_without_reason_text(self):
+        cases = mutation_check.platform_cases(os.name)
+        record = dict(mutation=cases[0][0], result='NOT_VERIFIED', baseline_exit_code=2,
+                      reason='private error/path/token')
+        rows = self.api.mutation_rows(cases, [record])
+        self.assertEqual(rows[0]['result'], 'NOT_VERIFIED')
+        self.assertTrue(all(row['result'] == 'NOT_RUN' for row in rows[1:]))
+        self.assertNotIn('private error/path/token', json.dumps(rows)); self.assertNotIn('reason', rows[0])
+        running = self.api.mutation_rows(cases, [record], active=1)
+        self.assertEqual(running[1]['result'], 'RUNNING')
+        self.assertEqual(running[2]['result'], 'NOT_RUN')
+        with self.assertRaises(ValueError): self.api.mutation_rows(cases[::-1], [record])
+
+    def test_workflow_report_destinations_use_step_context(self):
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        lines = workflow.splitlines()
+        destinations = [line for line in lines if 'CODE_INSPECTION_CI_REPORT_DIR:' in line]
+        self.assertEqual(len(destinations), 10)
+        self.assertTrue(all(line.startswith('          CODE_INSPECTION_CI_REPORT_DIR:')
+                            and '${{ runner.temp }}/ci-public/' in line for line in destinations))
+        # GitHub rejects runner context in job-level env before scheduling jobs.
+        for index, line in enumerate(lines):
+            if line == '    env:':
+                for child in lines[index + 1:]:
+                    if child and not child.startswith('      '): break
+                    self.assertNotIn('${{ runner.', child)
+        uploads = workflow.split('uses: actions/upload-artifact@')[1:]
+        self.assertEqual(len(uploads), 3)
+        for upload in uploads:
+            paths = upload.split('          path: |\n', 1)[1].split('          if-no-files-found:', 1)[0]
+            self.assertTrue(all(line.strip().startswith('${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/')
+                                and line.strip().endswith('.json') and '*' not in line for line in paths.splitlines()))
+
+    def test_context_does_not_relay_other_environment_values(self):
+        with patch.dict(os.environ, {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2',
+                                    'PRIVATE_TOKEN': 'secret', 'GITHUB_WORKSPACE': '/private/path'}):
+            result = self.api.context()
+        self.assertEqual(result['github_run_id'], '123')
+        self.assertRegex(result['sha'], r'^[0-9a-f]{40}$')
+        self.assertNotIn('private', json.dumps(result)); self.assertNotIn('secret', json.dumps(result))
+        with patch.dict(os.environ, {'GITHUB_RUN_ID': 'secret'}), self.assertRaises(ValueError):
+            self.api.context()
 
 
 class CiReceipts(unittest.TestCase):
@@ -210,6 +371,23 @@ class CiReceipts(unittest.TestCase):
                  for case in mutation_check.platform_cases('nt')]
                 if kind == 'mutations' else protocol_fixture()['observations'])
         return self.c.receipt_json(kind, self.context, rows)
+
+    def test_public_windows_receipt_keeps_validated_metadata_only(self):
+        from validation import ci_artifacts
+        output = self.root / 'github-output'; output.write_text('', encoding='ascii')
+        public = self.root / 'public'
+        with patch.dict(os.environ, {ci_artifacts.REPORT_ENV: str(public)}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.c.emit(self.maintained, {'GITHUB_OUTPUT': str(output)})
+        artifact = public / 'receipt-maintained.json'
+        self.assertEqual(json.loads(artifact.read_text()), json.loads(self.maintained))
+        self.assertEqual(list(public.iterdir()), [artifact])
+        self.assertNotIn(str(self.root), artifact.read_text())
+        invalid = json.loads(self.maintained); invalid['private'] = 'secret-marker'
+        with patch.dict(os.environ, {ci_artifacts.REPORT_ENV: str(self.root / 'rejected')}), \
+             self.assertRaises(ValueError):
+            self.c.emit(self.c.encode(invalid), {'GITHUB_OUTPUT': str(output)})
+        self.assertFalse((self.root / 'rejected').exists())
 
     def test_original_ordered_command_and_mutation_inventories_are_unchanged(self):
         # Independently captured before factoring platform selection; these bind
@@ -552,7 +730,8 @@ class CiReceipts(unittest.TestCase):
                 raise ValueError('private-value-' + str(self.root))
             return commands
 
-        def runner(selected, output, env):
+        def runner(selected, output, env, public_report=None):
+            self.assertIsNone(public_report)
             counts['run'] += 1
             rows = []
             for number, command in enumerate(selected):

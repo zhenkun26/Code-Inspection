@@ -50,6 +50,99 @@ class SourceManifestTests(unittest.TestCase):
         self.git('add', 'a'); self.git('commit', '-m', 'fixture')
         return self.git('rev-parse', 'HEAD')
 
+    def test_small_scope_in_large_git_index_and_tree(self):
+        self.repo()
+        (self.root / 'outside').mkdir()
+        for number in range(1024):
+            (self.root / 'outside' / str(number)).write_bytes(b'not selected')
+        self.git('add', 'outside'); self.git('commit', '-m', 'large outside scope')
+        head = self.git('rev-parse', 'HEAD')
+        cfg = config('git-worktree', scope=['a'], max_files=1)
+        selected_oid = self.git('rev-parse', 'HEAD:a')
+        original = self.api._Git.run
+        requests = []
+        def observe(instance, *args, **kwargs):
+            if args[0] == 'cat-file' and '--batch' in args:
+                requests.append(kwargs['input'])
+            return original(instance, *args, **kwargs)
+        with patch.object(self.api._Git, 'run', observe):
+            result = self.api.capture(self.root, cfg, base=head, head=head)
+        self.assertEqual([entry['path'] for entry in result['entries']], ['a'])
+        self.assertEqual(requests, [(selected_oid + '\n').encode()])
+        self.assertTrue(self.api.committed(result))
+        raw_index = (self.root / '.git' / 'index').read_bytes()
+        raw_tree = subprocess.run(['git', '-C', str(self.root), 'ls-tree', '-r', '-z', head],
+                                  env=git_environment(), check=True, capture_output=True).stdout
+        # Selected limits still reject; independent metadata caps remain bounded.
+        for parser, raw in ((self.api._index, raw_index), (self.api._trees, raw_tree)):
+            with self.subTest(parser=parser.__name__):
+                with self.assertRaisesRegex(ValueError, 'manifest entry limit'):
+                    parser(raw, config('git-worktree', max_files=1))
+                with patch.object(self.api, 'MAX_GIT_ENTRIES', 1024):
+                    with self.assertRaises(ValueError): parser(raw, cfg)
+
+    def test_excluded_git_link_modes_never_request_payloads(self):
+        head = self.repo()
+        # Cache entries exercise both parsers without requiring symlink privileges
+        # or a submodule checkout. The referenced commit/blob is host-owned.
+        blob = self.git('rev-parse', 'HEAD:a')
+        self.git('update-index', '--add', '--cacheinfo', '120000,' + blob + ',link')
+        self.git('update-index', '--add', '--cacheinfo', '160000,' + head + ',module')
+        self.git('commit', '-m', 'excluded link entries'); head = self.git('rev-parse', 'HEAD')
+        for cfg in (config('git-worktree', scope=['a'], max_files=1),
+                    config('git-worktree', exclusions=['link', 'module'])):
+            with self.subTest(config=cfg):
+                result = self.api.capture(self.root, cfg, base=head, head=head)
+                self.assertEqual([entry['path'] for entry in result['entries']], ['a'])
+        for name in ('link', 'module'):
+            with self.subTest(included=name), patch.object(self.api, '_blobs') as blobs:
+                with self.assertRaisesRegex(ValueError, 'unsupported Git index'):
+                    self.api.capture(self.root, config('git-worktree', scope=[name]), base=head, head=head)
+                blobs.assert_not_called()
+        # Also exercise HEAD rejection independently of index rejection.
+        raw_tree = subprocess.run(['git', '-C', str(self.root), 'ls-tree', '-r', '-z', head],
+                                  env=git_environment(), check=True, capture_output=True).stdout
+        for name in ('link', 'module'):
+            with self.assertRaisesRegex(ValueError, 'unsupported Git tree entry'):
+                self.api._trees(raw_tree, config('git-worktree', scope=[name]))
+
+    @unittest.skipUnless(os.name == 'posix', 'real POSIX symlink fixture')
+    def test_excluded_tracked_symlink_is_not_read(self):
+        self.repo(); (self.root / 'link').symlink_to('a')
+        self.git('add', 'link'); self.git('commit', '-m', 'link fixture')
+        head = self.git('rev-parse', 'HEAD')
+        cfg = config('git-worktree', exclusions=['link'])
+        result = self.api.capture(self.root, cfg, base=head, head=head)
+        self.assertEqual([entry['path'] for entry in result['entries']], ['a'])
+        with self.assertRaisesRegex(ValueError, 'link/special'):
+            self.api.capture(self.root, config('git-worktree'), base=head, head=head)
+
+    def test_scope_filter_retains_global_metadata_integrity_checks(self):
+        self.repo(); (self.root / 'b').write_bytes(b'outside')
+        self.git('add', 'b')
+        raw = (self.root / '.git' / 'index').read_bytes()
+        cfg = config('git-worktree', scope=['a'], max_files=1)
+        self.assertEqual(set(self.api._index(raw, cfg)), {'a'})
+        first_end = raw.index(b'\0', 12 + 62)
+        second = 12 + ((first_end + 1 - 12 + 7) // 8) * 8
+        for label, offset, replacement in [
+                ('unknown mode', second + 24, b'\0\0\0\0'),
+                ('extended flags', second + 60, b'\x40\x01'),
+                ('merge stage', second + 60, b'\x10\x01'),
+                ('collision', second + 62, b'A')]:
+            modified = bytearray(raw[:-20]); modified[offset:offset + len(replacement)] = replacement
+            modified = bytes(modified) + hashlib.sha1(modified).digest()
+            with self.subTest(label=label), self.assertRaises(ValueError): self.api._index(modified, cfg)
+        oid = self.git('rev-parse', 'HEAD:a').encode()
+        normal = b'100644 blob ' + oid + b'\ta\0'
+        for suffix in (b'120000 blob ' + oid + b'\t../outside\0',
+                       b'100644 blob ' + b'x' * 40 + b'\tb\0',
+                       b'100644 blob ' + oid + b'\tb',
+                       b'100644 blob ' + oid + b'\tA\0',
+                       (b'100644 blob ' + oid + b'\tb\0') * 2):
+            with self.subTest(suffix=suffix), self.assertRaises(ValueError):
+                self.api._trees(normal + suffix, cfg)
+
     def capture_transition(self, head, **limits):
         try:
             result = self.api.capture(self.root, config('git-worktree', **limits), base=head, head=head)

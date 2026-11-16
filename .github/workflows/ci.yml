@@ -41,10 +41,28 @@ jobs:
           python --version
           git --version
       - name: Run maintained checks (ordinary and optimized Python)
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         run: python -B validation/run_checks.py --keep-artifacts
       - name: Check fixed guard-removal regressions
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         if: matrix.python == '3.13'
         run: python -B validation/mutation_check.py
+      - name: Upload selected verification records
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-${{ matrix.os }}-py${{ matrix.python }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/maintained.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/mutations.json
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false
 
   windows_maintained:
     name: Windows maintained / Python 3.13
@@ -69,8 +87,25 @@ jobs:
           python --version
           git --version
       - name: Run native prechecks and maintained checks
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         id: maintained
         run: python -B validation/ci_receipts.py maintained
+      - name: Upload selected verification records
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-windows-maintained-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/native.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/maintained.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/receipt-maintained.json
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false
 
   windows_final:
     name: windows-2025 / Python 3.13
@@ -97,14 +132,20 @@ jobs:
           python --version
           git --version
       - name: Verify prerequisite and run all Windows mutations
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         id: mutations
         run: python -B validation/ci_receipts.py mutations
       - name: Observe isolated Windows temporary APIs
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         id: observe
         if: ${{ !cancelled() && needs.windows_maintained.result == 'success' }}
         timeout-minutes: 2
         run: python -B validation/ci_receipts.py observe
       - name: Observe optimized isolated Windows temporary APIs
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
         id: optimized
         if: ${{ !cancelled() && needs.windows_maintained.result == 'success' }}
         timeout-minutes: 2
@@ -113,6 +154,7 @@ jobs:
         id: aggregate
         if: ${{ always() }}
         env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
           CI_MUTATION_RESULT: ${{ steps.mutations.outcome }}
           CI_MUTATION_RECEIPT: ${{ steps.mutations.outputs.receipt }}
           CI_OBSERVE_RESULT: ${{ steps.observe.outcome }}
@@ -120,3 +162,20 @@ jobs:
           CI_OPTIMIZED_RESULT: ${{ steps.optimized.outcome }}
           CI_OPTIMIZED_RECEIPT: ${{ steps.optimized.outputs.receipt }}
         run: python -B validation/ci_receipts.py aggregate
+      - name: Upload selected verification records
+        env:
+          CODE_INSPECTION_CI_REPORT_DIR: ${{ runner.temp }}/ci-public/${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verification-windows-final-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/mutations.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/receipt-mutations.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/receipt-observe.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/receipt-optimized.json
+            ${{ env.CODE_INSPECTION_CI_REPORT_DIR }}/receipt-aggregate.json
+          if-no-files-found: warn
+          retention-days: 14
+          include-hidden-files: false
+          overwrite: false

@@ -27,6 +27,7 @@ MAX_FILE = 1048576
 MAX_TOTAL = 8388608
 MAX_MANIFEST = 1048576
 MAX_VISITED = 4096
+MAX_GIT_ENTRIES = 4096
 MAX_DEPTH = 32
 CONFIG_FIELDS = {'mode', 'scope', 'exclusions', 'max_files', 'max_file_bytes',
                  'max_total_bytes', 'isolation'}
@@ -338,19 +339,23 @@ def _metadata(root):
 def _index(raw, config):
     require(len(raw) >= 32 and raw[:4] == b'DIRC' and hashlib.sha1(raw[:-20]).digest() == raw[-20:], 'UNKNOWN: invalid Git index')
     version, count = struct.unpack('>II', raw[4:12])
-    require(version in {2,3} and count <= MAX_FILES, 'UNKNOWN: unsupported Git index version/size')
+    require(version in {2,3} and count <= MAX_GIT_ENTRIES, 'UNKNOWN: unsupported Git index version/size')
     offset = 12; result = {}
     for _ in range(count):
         start = offset; require(offset+62 <= len(raw)-20, 'UNKNOWN: truncated Git index')
         mode = struct.unpack('>I', raw[offset+24:offset+28])[0]
         oid = raw[offset+40:offset+60].hex(); flags = struct.unpack('>H', raw[offset+60:offset+62])[0]
-        require(flags & 0xf000 == 0 and mode in {0o100644,0o100755}, 'UNKNOWN: unsupported Git index stage/flags/mode')
+        # Extended entries and merge stages remain unsupported globally.
+        require(flags & 0x7000 == 0, 'UNKNOWN: unsupported extended/staged Git index entry')
+        require(mode in {0o100644,0o100755,0o120000,0o160000}, 'UNKNOWN: unsupported Git index mode')
         end = raw.find(b'\0', offset+62, len(raw)-20)
         require(end >= 0, 'UNKNOWN: truncated index path')
         path = raw[offset+62:end].decode('utf-8', 'strict'); _path(path)
         require(path not in result, 'UNKNOWN: duplicate index path')
         offset = start + ((end+1-start+7)//8)*8
         require(offset <= len(raw)-20 and not any(raw[end:offset]), 'UNKNOWN: index padding')
+        if _included(path, config):
+            require(flags & 0xf000 == 0 and mode in {0o100644,0o100755}, 'UNKNOWN: unsupported Git index stage/flags/mode')
         result[path] = (mode, oid)
     while offset < len(raw)-20:
         require(offset+8 <= len(raw)-20, 'UNKNOWN: index extension truncated')
@@ -358,22 +363,30 @@ def _index(raw, config):
         require(tag in {b'TREE', b'REUC'} and offset+8+size <= len(raw)-20, 'UNKNOWN: unsupported Git index extension')
         offset += 8+size
     _collision(result)
-    return {k:v for k,v in result.items() if _included(k, config)}
+    selected = {k:v for k,v in result.items() if _included(k, config)}
+    require(len(selected) <= config['max_files'], 'UNKNOWN: manifest entry limit')
+    return selected
 
 
 def _trees(raw, config):
     result = {}; count = 0
     require(not raw or raw.endswith(b'\0'), 'UNKNOWN: Git tree framing')
     for record in raw.split(b'\0')[:-1]:
-        count += 1; require(count <= MAX_FILES, 'UNKNOWN: Git tree entry limit')
+        count += 1; require(count <= MAX_GIT_ENTRIES, 'UNKNOWN: Git tree metadata entry limit')
         meta, path = record.split(b'\t', 1); mode, kind, oid = meta.split(b' ')
         path = path.decode('utf-8', 'strict'); _path(path)
-        require(mode in {b'100644',b'100755'} and kind == b'blob', 'UNKNOWN: unsupported Git tree entry')
+        require((mode, kind) in {(b'100644', b'blob'), (b'100755', b'blob'),
+                                (b'120000', b'blob'), (b'160000', b'commit')},
+                'UNKNOWN: unsupported Git tree metadata')
+        if _included(path, config):
+            require(mode in {b'100644',b'100755'} and kind == b'blob', 'UNKNOWN: unsupported Git tree entry')
         object_id = oid.decode('ascii'); _sha(object_id, 40)
         require(path not in result, 'UNKNOWN: duplicate tree entry')
         result[path] = (int(mode, 8), object_id)
     _collision(result)
-    return {k:v for k,v in result.items() if _included(k, config)}
+    selected = {k:v for k,v in result.items() if _included(k, config)}
+    require(len(selected) <= config['max_files'], 'UNKNOWN: manifest entry limit')
+    return selected
 
 
 def _blobs(git, objects, config, filesystem_bytes):
